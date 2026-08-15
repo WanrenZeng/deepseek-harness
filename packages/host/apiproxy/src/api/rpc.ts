@@ -77,6 +77,12 @@ export interface RpcErrorDetailsMap {
   'settings-conflict': { ns: string; expected: number; actual: number }
   /** A credential write was refused (read-only shadowing layer or storage failure); the message is the seam's own text. */
   'credential-rejected': { ref: string }
+  'provider-auth-unsupported': { provider?: string; method?: 'oauth' }
+  'provider-auth-login-unknown': { provider?: string; loginId?: string }
+  'provider-auth-prompt-unknown': { provider?: string; loginId?: string; promptId?: string }
+  'provider-auth-cancelled': { provider?: string; loginId?: string }
+  'provider-auth-expired': { provider?: string; loginId?: string }
+  'provider-auth-provider-failed': { provider?: string; method?: 'oauth'; loginId?: string; promptId?: string }
   /**
    * Interrogating a draft provider endpoint did not produce a model listing:
    * no adapter family serves the namespace, the protocol has no listing this

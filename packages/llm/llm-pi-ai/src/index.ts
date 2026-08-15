@@ -177,9 +177,10 @@ export function apply(ctx: Context, config: Config): void {
   const serviceableOAuthProviders = (): readonly string[] =>
     catalogProviderIds().filter(provider => provider === 'github-copilot' && catalogProviderTakesOAuth(provider) && ctx.get('credentials') !== undefined)
   const oauthServiceable = (provider: string): boolean => serviceableOAuthProviders().includes(provider)
-  const oauthCredentials = ctx.get('credentials') === undefined
+  const credentials = ctx.get('credentials')
+  const oauthCredentials = credentials === undefined
     ? undefined
-    : new HarnessPiAiCredentialStore(ctx.get('credentials'), serviceableOAuthProviders)
+    : new HarnessPiAiCredentialStore(credentials, serviceableOAuthProviders)
 
   const resolveApiKey = async (
     provider: string,

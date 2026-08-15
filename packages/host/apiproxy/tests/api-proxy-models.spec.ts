@@ -10,8 +10,10 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions, LlmCallConfig, LlmModelInfo, LlmModelReasoningInfo, LlmProviderInfo,
+  LlmProviderAuthLoginSnapshot, LlmProviderAuthStatus,
   LlmResolvedModelInfo, StreamChunk,
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
@@ -61,6 +63,75 @@ class CatalogAdapter extends LlmAdapter {
   override async *stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
     // Catalog tests never enter provider streaming.
   }
+}
+
+class ProviderAuthAdapter extends LlmAdapter {
+  private readonly logins = new Map<string, LlmProviderAuthLoginSnapshot>()
+
+  override providerInfo(provider: string): LlmProviderInfo {
+    return { id: provider, name: 'GitHub Copilot' }
+  }
+
+  override providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
+    return Promise.resolve({
+      provider,
+      methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: false }],
+    })
+  }
+
+  override startProviderAuthLogin(_provider: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const snapshot: LlmProviderAuthLoginSnapshot = {
+      loginId: 'login-1',
+      state: 'pending',
+      events: [{
+        id: 'prompt-1',
+        type: 'prompt',
+        promptType: 'text',
+        message: 'Enter organization',
+      }],
+    }
+    this.logins.set(snapshot.loginId, snapshot)
+    return Promise.resolve(snapshot)
+  }
+
+  override providerAuthLogin(_provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const snapshot = this.logins.get(loginId)
+    if (snapshot === undefined) throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    return Promise.resolve(snapshot)
+  }
+
+  override answerProviderAuthLogin(_provider: string, loginId: string, promptId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const snapshot = this.logins.get(loginId)
+    if (snapshot === undefined) throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    if (!snapshot.events.some(event => event.type === 'prompt' && event.id === promptId)) {
+      throw new LlmError(`unknown provider auth prompt "${promptId}"`, 'UNKNOWN_AUTH_PROMPT')
+    }
+    const next: LlmProviderAuthLoginSnapshot = {
+      loginId,
+      state: 'completed',
+      events: [],
+      status: {
+        provider: 'github-copilot',
+        methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: true, source: 'OAuth' }],
+      },
+    }
+    this.logins.set(loginId, next)
+    return Promise.resolve(next)
+  }
+
+  override cancelProviderAuthLogin(_provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const snapshot = this.logins.get(loginId)
+    if (snapshot === undefined) throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    const next: LlmProviderAuthLoginSnapshot = { ...snapshot, state: 'cancelled' }
+    this.logins.set(loginId, next)
+    return Promise.resolve(next)
+  }
+
+  override logoutProviderAuth(provider: string): Promise<LlmProviderAuthStatus> {
+    return this.providerAuthStatus(provider)
+  }
+
+  override async *stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {}
 }
 
 const REASONING: LlmModelReasoningInfo = {
@@ -495,6 +566,55 @@ describe('Web session model selection', () => {
     expect(catalog.current).toEqual({ provider: 'deleted-gateway', model: 'deleted-model' })
     expect(catalog.groups.flatMap(group => group.models.map(model => `${group.id}/${model.id}`)))
       .not.toContain('deleted-gateway/deleted-model')
+    await ctx.fiber.dispose()
+  })
+})
+
+describe('provider-auth rpc surface', () => {
+  it('serves provider-auth status/login/answer/cancel/logout', async () => {
+    const { ctx } = await harness()
+    ctx.llm.registerAdapter(['github-copilot'], new ProviderAuthAdapter())
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }), cwd: '/tmp' })
+
+    const status = await api.llm.providerAuthStatus(request({ provider: 'github-copilot' }))
+    expect(status.result).toMatchObject({ ok: true, value: { status: { provider: 'github-copilot' } } })
+    const started = await api.llm.providerAuthLoginStart(request({ provider: 'github-copilot', method: 'oauth' }))
+    expect(started.result).toMatchObject({ ok: true, value: { state: 'pending' } })
+    const login = await api.llm.providerAuthLoginGet(request({ provider: 'github-copilot', loginId: 'login-1' }))
+    expect(login.result).toMatchObject({ ok: true, value: { loginId: 'login-1' } })
+    const answered = await api.llm.providerAuthLoginAnswer(request({
+      provider: 'github-copilot',
+      loginId: 'login-1',
+      promptId: 'prompt-1',
+      answer: 'acme',
+    }))
+    expect(answered.result).toMatchObject({ ok: true, value: { state: 'completed' } })
+    const cancelled = await api.llm.providerAuthLoginCancel(request({ provider: 'github-copilot', loginId: 'login-1' }))
+    expect(cancelled.result).toMatchObject({ ok: true, value: { state: 'cancelled' } })
+    const loggedOut = await api.llm.providerAuthLogout(request({ provider: 'github-copilot', method: 'oauth' }))
+    expect(loggedOut.result).toMatchObject({ ok: true, value: { status: { provider: 'github-copilot' } } })
+    await ctx.fiber.dispose()
+  })
+
+  it('maps provider-auth errors to stable wire codes', async () => {
+    const { ctx } = await harness()
+    ctx.llm.registerAdapter(['github-copilot'], new ProviderAuthAdapter())
+    const api = createApiProxy(ctx, { defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }), cwd: '/tmp' })
+
+    const unsupported = await api.llm.providerAuthStatus(request({ provider: 'not-owned' }))
+    expect(unsupported.result).toMatchObject({ ok: false, error: { code: 'provider-auth-unsupported' } })
+
+    const unknownLogin = await api.llm.providerAuthLoginGet(request({ provider: 'github-copilot', loginId: 'nope' }))
+    expect(unknownLogin.result).toMatchObject({ ok: false, error: { code: 'provider-auth-login-unknown' } })
+
+    await api.llm.providerAuthLoginStart(request({ provider: 'github-copilot', method: 'oauth' }))
+    const unknownPrompt = await api.llm.providerAuthLoginAnswer(request({
+      provider: 'github-copilot',
+      loginId: 'login-1',
+      promptId: 'missing',
+      answer: '',
+    }))
+    expect(unknownPrompt.result).toMatchObject({ ok: false, error: { code: 'provider-auth-prompt-unknown' } })
     await ctx.fiber.dispose()
   })
 })

@@ -102,8 +102,11 @@ export const en = {
   oauthSignedIn: 'Signed in with OAuth.',
   oauthSignedOut: 'Not signed in with OAuth.',
   oauthWorking: 'Working…',
+  oauthCancel: 'Cancel sign-in',
   oauthOpen: 'Open',
   oauthEnterCode: 'and enter code',
+  oauthPromptInput: 'OAuth prompt input',
+  oauthPromptSubmit: 'Continue',
   oauthFailed: 'OAuth sign-in failed.',
 }
 
@@ -210,7 +213,10 @@ export const zh: { [Key in keyof typeof en]: string } = {
   oauthSignedIn: '已通过 OAuth 登录。',
   oauthSignedOut: '尚未通过 OAuth 登录。',
   oauthWorking: '处理中…',
+  oauthCancel: '取消登录',
   oauthOpen: '打开',
   oauthEnterCode: '并输入代码',
+  oauthPromptInput: 'OAuth 提示输入',
+  oauthPromptSubmit: '继续',
   oauthFailed: 'OAuth 登录失败。',
 }

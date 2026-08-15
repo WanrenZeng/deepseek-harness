@@ -128,28 +128,35 @@ export const providerAuthLoginViewSchema = z.object({
   error: z.string().optional(),
 }) satisfies z.ZodType<Wire<ProviderAuthLoginView>>
 
+/** Request schema for llm.providerAuthStatus. */
 export const llmProviderAuthStatusRequestSchema = z.object({
   provider: z.string().min(1),
 }) satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthStatus'>>>
 
+/** Response schema for llm.providerAuthStatus. */
 export const llmProviderAuthStatusValueSchema = z.object({
   status: providerAuthStatusViewSchema,
 }) satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthStatus'>>>
 
+/** Request schema for llm.providerAuthLoginStart. */
 export const llmProviderAuthLoginStartRequestSchema = z.object({
   provider: z.string().min(1),
   method: z.literal('oauth'),
 }) satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthLoginStart'>>>
 
+/** Response schema for llm.providerAuthLoginStart. */
 export const llmProviderAuthLoginStartValueSchema = providerAuthLoginViewSchema satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthLoginStart'>>>
 
+/** Request schema for llm.providerAuthLoginGet. */
 export const llmProviderAuthLoginGetRequestSchema = z.object({
   provider: z.string().min(1),
   loginId: z.string().min(1),
 }) satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthLoginGet'>>>
 
+/** Response schema for llm.providerAuthLoginGet. */
 export const llmProviderAuthLoginGetValueSchema = providerAuthLoginViewSchema satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthLoginGet'>>>
 
+/** Request schema for llm.providerAuthLoginAnswer. */
 export const llmProviderAuthLoginAnswerRequestSchema = z.object({
   provider: z.string().min(1),
   loginId: z.string().min(1),
@@ -157,17 +164,22 @@ export const llmProviderAuthLoginAnswerRequestSchema = z.object({
   answer: z.string(),
 }) satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthLoginAnswer'>>>
 
+/** Response schema for llm.providerAuthLoginAnswer. */
 export const llmProviderAuthLoginAnswerValueSchema = providerAuthLoginViewSchema satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthLoginAnswer'>>>
 
+/** Request schema for llm.providerAuthLoginCancel. */
 export const llmProviderAuthLoginCancelRequestSchema = llmProviderAuthLoginGetRequestSchema satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthLoginCancel'>>>
 
+/** Response schema for llm.providerAuthLoginCancel. */
 export const llmProviderAuthLoginCancelValueSchema = providerAuthLoginViewSchema satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthLoginCancel'>>>
 
+/** Request schema for llm.providerAuthLogout. */
 export const llmProviderAuthLogoutRequestSchema = z.object({
   provider: z.string().min(1),
   method: z.literal('oauth'),
 }) satisfies z.ZodType<Wire<RequestPayload<'llm.providerAuthLogout'>>>
 
+/** Response schema for llm.providerAuthLogout. */
 export const llmProviderAuthLogoutValueSchema = z.object({
   status: providerAuthStatusViewSchema,
 }) satisfies z.ZodType<Wire<ResponseValue<'llm.providerAuthLogout'>>>

@@ -222,6 +222,12 @@ export class FakeApiClient implements IApiClient {
     providers: payload => this.record('llm.providers', payload, Promise.resolve(ok({ providers: [] }))),
     models: payload => this.record('llm.models', payload, Promise.resolve(ok({ groups: [], failures: [] }))),
     discoverModels: payload => this.record('llm.discoverModels', payload, Promise.resolve(ok({ models: [] }))),
+    providerAuthStatus: payload => this.record('llm.providerAuthStatus', payload, Promise.resolve(ok({ status: { provider: payload.provider, methods: [] } }))),
+    providerAuthLoginStart: payload => this.record('llm.providerAuthLoginStart', payload, Promise.resolve(ok({ loginId: 'fx-login', state: 'pending', events: [] }))),
+    providerAuthLoginGet: payload => this.record('llm.providerAuthLoginGet', payload, Promise.resolve(ok({ loginId: payload.loginId, state: 'pending', events: [] }))),
+    providerAuthLoginAnswer: payload => this.record('llm.providerAuthLoginAnswer', payload, Promise.resolve(ok({ loginId: payload.loginId, state: 'pending', events: [] }))),
+    providerAuthLoginCancel: payload => this.record('llm.providerAuthLoginCancel', payload, Promise.resolve(ok({ loginId: payload.loginId, state: 'cancelled', events: [] }))),
+    providerAuthLogout: payload => this.record('llm.providerAuthLogout', payload, Promise.resolve(ok({ status: { provider: payload.provider, methods: [] } }))),
   }
 
   /** When true, streams never fire onOpen (misbehaving-carrier material for the handshake timeout guard). */

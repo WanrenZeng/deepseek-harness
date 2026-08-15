@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /** Model-list editing, endpoint interrogation, and hand-declared provider creation. */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Schema from '@deepseek-ai/schemastery'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
-import type { RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { ProviderAuthLoginView, ProviderAuthStatusView, RpcResponse, SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { ModelsSection, providerCopy } from '../src/client/ModelsSection.tsx'
 import type { ModelsSectionInjected } from '../src/client/ModelsSection.tsx'
 import { CustomProviderCard } from '../src/client/CustomProviderCard.tsx'
@@ -12,7 +12,10 @@ import { formatCapacity, parseCapacity } from '../src/client/DeepSeekModelsEdito
 import { ModelsSettingsStore, deriveKeyRef, protocolChoices } from '../src/client/store.ts'
 import { en } from '../src/client/locales.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+})
 
 const t: ModelsSectionInjected['t'] = key => en[key]
 
@@ -74,6 +77,13 @@ function scriptedFace(options: {
   discover?: ReturnType<typeof vi.fn>
   mutate?: ReturnType<typeof vi.fn>
   set?: ReturnType<typeof vi.fn>
+  oauthProviders?: readonly string[]
+  authStatus?: ProviderAuthStatusView
+  providerAuthLoginStart?: ReturnType<typeof vi.fn>
+  providerAuthLoginGet?: ReturnType<typeof vi.fn>
+  providerAuthLoginAnswer?: ReturnType<typeof vi.fn>
+  providerAuthLoginCancel?: ReturnType<typeof vi.fn>
+  providerAuthLogout?: ReturnType<typeof vi.fn>
 } = {}) {
   const providers = options.providers ?? {
     openai: { apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://proxy.example/v1' },
@@ -82,6 +92,46 @@ function scriptedFace(options: {
   const discover = options.discover ?? vi.fn(() => Promise.resolve(ok({ models: [] })))
   const mutate = options.mutate ?? vi.fn(() => Promise.resolve(ok(namespace)))
   const set = options.set ?? vi.fn(() => Promise.resolve(ok({})))
+  const oauthProviders = options.oauthProviders ?? []
+  const oauthStatus = options.authStatus ?? {
+    provider: oauthProviders[0] ?? 'openai',
+    methods: [{ type: 'oauth' as const, label: 'Sign in with GitHub', serviceable: true, configured: false }],
+  }
+  const oauthStart = options.providerAuthLoginStart ?? vi.fn((): Promise<RpcResponse<ProviderAuthLoginView>> => Promise.resolve(ok({
+    loginId: 'login-1',
+    state: 'pending',
+    events: [{
+      id: 'device-1',
+      type: 'device_code',
+      userCode: 'ABCD-EFGH',
+      verificationUri: 'https://github.com/login/device',
+    }],
+  })))
+  const oauthGet = options.providerAuthLoginGet ?? vi.fn(() => Promise.resolve(ok({
+    loginId: 'login-1',
+    state: 'pending',
+    events: [],
+  })))
+  const oauthAnswer = options.providerAuthLoginAnswer ?? vi.fn(() => Promise.resolve(ok({
+    loginId: 'login-1',
+    state: 'completed',
+    events: [],
+    status: {
+      provider: 'openai',
+      methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: true, source: 'OAuth' }],
+    },
+  })))
+  const oauthCancel = options.providerAuthLoginCancel ?? vi.fn(() => Promise.resolve(ok({
+    loginId: 'login-1',
+    state: 'cancelled',
+    events: [],
+  })))
+  const oauthLogout = options.providerAuthLogout ?? vi.fn(() => Promise.resolve(ok({
+    status: {
+      provider: 'openai',
+      methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: false }],
+    },
+  })))
   const face = {
     llm: {
       providers: vi.fn(() => Promise.resolve(ok({
@@ -92,10 +142,19 @@ function scriptedFace(options: {
           settingsPath: ['providers', provider],
           active: true,
           declared: options.declaredRoutes?.includes(provider) ?? false,
+          ...oauthProviders.includes(provider)
+            ? { authMethods: [{ type: 'oauth' as const, label: 'Sign in with GitHub', serviceable: true }] }
+            : {},
         })),
       }))),
       models: vi.fn(() => Promise.resolve(ok({ groups: [], failures: [] }))),
       discoverModels: discover,
+      providerAuthStatus: vi.fn(() => Promise.resolve(ok({ status: oauthStatus }))),
+      providerAuthLoginStart: oauthStart,
+      providerAuthLoginGet: oauthGet,
+      providerAuthLoginAnswer: oauthAnswer,
+      providerAuthLoginCancel: oauthCancel,
+      providerAuthLogout: oauthLogout,
     },
     settings: {
       describe: vi.fn(() => Promise.resolve(ok({ writable: true, namespaces: [namespace] }))),
@@ -1259,6 +1318,128 @@ describe('hand-declared providers', () => {
 
     await waitFor(() => { expect(onClose).toHaveBeenCalledWith(true) })
     expect(set).not.toHaveBeenCalled()
+  })
+})
+
+describe('OAuth controls', () => {
+  it('renders sign-in progress with linkable device code and allows cancellation', async () => {
+    const providerAuthLoginGet = vi.fn(() => Promise.resolve(ok({
+      loginId: 'login-1',
+      state: 'pending',
+      events: [{
+        id: 'device-1',
+        type: 'device_code' as const,
+        userCode: 'ABCD-EFGH',
+        verificationUri: 'https://github.com/login/device',
+      }],
+    })))
+    const providerAuthLoginCancel = vi.fn(() => Promise.resolve(ok({
+      loginId: 'login-1',
+      state: 'cancelled',
+      events: [],
+    })))
+    await mountSection({ oauthProviders: ['openai'], providerAuthLoginGet, providerAuthLoginCancel })
+    openEditor('openai')
+
+    expect(screen.getByLabelText(en.keyInput)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en.oauthSignIn }))
+    await waitFor(() => { expect(providerAuthLoginGet).toHaveBeenCalled() })
+    expect(screen.getByText('ABCD-EFGH')).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'https://github.com/login/device' })
+    expect(link.getAttribute('href')).toBe('https://github.com/login/device')
+
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)) })
+    fireEvent.click(screen.getByRole('button', { name: en.oauthCancel }))
+    await waitFor(() => { expect(providerAuthLoginCancel).toHaveBeenCalledWith({ provider: 'openai', loginId: 'login-1' }) })
+  })
+
+  it('auto-answers only the optional github prompt and allows submitting required prompts', async () => {
+    const providerAuthLoginAnswer = vi.fn((payload: { promptId: string }) =>
+      payload.promptId === 'required-prompt'
+        ? Promise.resolve(ok({
+          loginId: 'login-1',
+          state: 'pending',
+          events: [],
+        }))
+        : Promise.resolve(ok({
+          loginId: 'login-1',
+          state: 'pending',
+          events: [
+            {
+              id: 'required-prompt',
+              type: 'prompt' as const,
+              promptType: 'text' as const,
+              message: 'Enter organization',
+              placeholder: 'org',
+            },
+          ],
+        })))
+    const providerAuthLoginGet = vi.fn(() => Promise.resolve(ok({
+      loginId: 'login-1',
+      state: 'pending',
+      events: [
+        {
+          id: 'optional-github',
+          type: 'prompt' as const,
+          promptType: 'text' as const,
+          message: 'Optional: press Enter to continue with github.com default account.',
+          placeholder: 'Leave blank',
+        },
+        {
+          id: 'required-prompt',
+          type: 'prompt' as const,
+          promptType: 'text' as const,
+          message: 'Enter organization',
+          placeholder: 'org',
+        },
+      ],
+    })))
+    await mountSection({ oauthProviders: ['openai'], providerAuthLoginGet, providerAuthLoginAnswer })
+    openEditor('openai')
+
+    fireEvent.click(screen.getByRole('button', { name: en.oauthSignIn }))
+    await waitFor(() => {
+      expect(providerAuthLoginAnswer).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'openai',
+        promptId: 'optional-github',
+        answer: '',
+      }))
+    })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1100)) })
+    expect(providerAuthLoginAnswer.mock.calls.filter(([payload]) => payload.promptId === 'optional-github')).toHaveLength(1)
+
+    fireEvent.change(screen.getByLabelText(en.oauthPromptInput), { target: { value: 'acme' } })
+    fireEvent.click(screen.getByRole('button', { name: en.oauthPromptSubmit }))
+    await waitFor(() => {
+      expect(providerAuthLoginAnswer).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'openai',
+        promptId: 'required-prompt',
+        answer: 'acme',
+      }))
+    })
+  })
+
+  it('shows signed-in state and logs out without removing the API key field', async () => {
+    const providerAuthLogout = vi.fn(() => Promise.resolve(ok({
+      status: {
+        provider: 'openai',
+        methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: false }],
+      },
+    })))
+    await mountSection({
+      oauthProviders: ['openai'],
+      authStatus: {
+        provider: 'openai',
+        methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: true, source: 'OAuth' }],
+      },
+      providerAuthLogout,
+    })
+    openEditor('openai')
+
+    expect(screen.getByLabelText(en.keyInput)).toBeTruthy()
+    expect(screen.getByRole('button', { name: en.oauthSignOut })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: en.oauthSignOut }))
+    await waitFor(() => { expect(providerAuthLogout).toHaveBeenCalledWith({ provider: 'openai', method: 'oauth' }) })
   })
 })
 
