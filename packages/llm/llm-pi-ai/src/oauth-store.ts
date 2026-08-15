@@ -16,7 +16,11 @@ import type { Credential, CredentialInfo, CredentialStore } from '@earendil-work
 /** Prefix for Harness credential references that hold pi-ai OAuth credentials. */
 const REF_PREFIX = 'DSH_PI_AI_OAUTH_'
 
-/** Convert a provider route into its host-owned OAuth credential reference. */
+/**
+ * Convert a provider route into its host-owned OAuth credential reference.
+ * @param provider - provider route key.
+ * @returns harness credential reference storing the route's OAuth payload.
+ */
 export function oauthCredentialRef(provider: string): CredentialRef {
   return credentialRef(`${REF_PREFIX}${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`)
 }

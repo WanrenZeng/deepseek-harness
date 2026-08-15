@@ -162,12 +162,21 @@ export function catalogProviderTakesApiKey(provider: string): boolean {
   return catalogProvider(provider)?.auth.apiKey !== undefined
 }
 
-/** Whether this installed catalog provider declares OAuth support. */
+/**
+ * Whether this installed catalog provider declares OAuth support.
+ * @param provider - provider route key.
+ * @returns true when the catalog provider declares an OAuth method.
+ */
 export function catalogProviderTakesOAuth(provider: string): boolean {
   return catalogProvider(provider)?.auth.oauth !== undefined
 }
 
-/** Auth methods this pi-ai catalog provider declares and this runtime may service. */
+/**
+ * Auth methods this pi-ai catalog provider declares and this runtime may service.
+ * @param provider - provider route key.
+ * @param oauthServiceable - whether OAuth login is serviceable for this route.
+ * @returns redacted method metadata for directory entries and status views.
+ */
 export function catalogProviderAuthMethods(provider: string, oauthServiceable: boolean): readonly LlmProviderAuthMethodInfo[] {
   const auth = catalogProvider(provider)?.auth
   if (auth === undefined) return []

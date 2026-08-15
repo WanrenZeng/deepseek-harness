@@ -391,6 +391,8 @@ interface LlmConfigurableProvider {
    * from outside.
    */
   declared?: boolean
+  /** Authentication methods this runtime can offer for the route. */
+  authMethods?: readonly LlmProviderAuthMethodInfo[]
 }
 ```
 
@@ -699,6 +701,54 @@ declare abstract class LlmAdapter {
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo>;
   /**
+   * Redacted authentication status for one owned provider route.
+   * @param provider - provider route owned by this adapter.
+   * @returns Redacted method status metadata for the route.
+   */
+  providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus>;
+  /**
+   * Start an interactive auth flow for one owned provider route.
+   * @param _provider - provider route owned by this adapter.
+   * @param _method - auth method to start.
+   * @returns Login snapshot for polling and prompt answer operations.
+   */
+  startProviderAuthLogin(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot>;
+  /**
+   * Read a login flow snapshot.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @returns Latest snapshot for the interactive login.
+   */
+  providerAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot>;
+  /**
+   * Answer a pending public login prompt.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @param _promptId - opaque prompt identifier from login events.
+   * @param _answer - public answer text for the prompt.
+   * @returns Updated login snapshot after the answer is applied.
+   */
+  answerProviderAuthLogin(
+    _provider: string,
+    _loginId: string,
+    _promptId: string,
+    _answer: string,
+  ): Promise<LlmProviderAuthLoginSnapshot>;
+  /**
+   * Cancel a login flow.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @returns Updated login snapshot after cancellation.
+   */
+  cancelProviderAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot>;
+  /**
+   * Remove stored credentials for one method.
+   * @param _provider - provider route owned by this adapter.
+   * @param _method - auth method whose stored credential should be removed.
+   * @returns Redacted status after logout.
+   */
+  logoutProviderAuth(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus>;
+  /**
    * Stream one model call as raw chunks. The only required method.
    * @param options - the fully-assembled request; implementations must honor `options.signal`.
    * @returns the chunk stream, obeying the adapter contract documented on `StreamChunk`.
@@ -828,6 +878,55 @@ async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<Ll
 async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<PreparedLlmCall>
 
 /**
+ * Redacted authentication status for one registered provider.
+ * @param provider - provider route key owned by one registered adapter.
+ * @returns Redacted authentication status for every offered method.
+ */
+providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus>
+
+/**
+ * Start an interactive provider-auth login.
+ * @param provider - provider route key owned by one registered adapter.
+ * @param method - provider-auth method to start.
+ * @returns Initial login snapshot for polling and prompt answers.
+ */
+startProviderAuthLogin(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot>
+
+/**
+ * Read an interactive provider-auth login snapshot.
+ * @param provider - provider route key owned by one registered adapter.
+ * @param loginId - opaque login id returned by startProviderAuthLogin.
+ * @returns Latest login snapshot.
+ */
+providerAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot>
+
+/**
+ * Answer a pending interactive provider-auth prompt.
+ * @param provider - provider route key owned by one registered adapter.
+ * @param loginId - opaque login id returned by startProviderAuthLogin.
+ * @param promptId - opaque prompt id from a login event.
+ * @param answer - public answer text for the prompt.
+ * @returns Updated login snapshot after the answer is applied.
+ */
+answerProviderAuthLogin( provider: string, loginId: string, promptId: string, answer: string, ): Promise<LlmProviderAuthLoginSnapshot>
+
+/**
+ * Cancel an interactive provider-auth login.
+ * @param provider - provider route key owned by one registered adapter.
+ * @param loginId - opaque login id returned by startProviderAuthLogin.
+ * @returns Updated login snapshot after cancellation.
+ */
+cancelProviderAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot>
+
+/**
+ * Remove a stored provider-auth credential.
+ * @param provider - provider route key owned by one registered adapter.
+ * @param method - provider-auth method whose credential should be removed.
+ * @returns Redacted authentication status after credential removal.
+ */
+logoutProviderAuth(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus>
+
+/**
  * Stream one model call as raw chunks (token-level deltas). Replay state is
  * retained only when the same adapter instance owns its historical provider
  * and the target provider. Final adapter selection remains fixed through
@@ -841,7 +940,7 @@ async prepareCall(config: LlmCallConfig, signal?: AbortSignal): Promise<Prepared
 stream(options: GenerateOptions): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:284`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:353`](../../packages/llm/llm/src/index.ts)
 
 <a id="llm-events"></a>
 
@@ -890,5 +989,5 @@ Waterfall around every streaming model call (retry, replay, routing). Bound to t
 'llm/stream'(this: LlmRuntime, options: GenerateOptions, next: () => AsyncIterable<StreamChunk>): AsyncIterable<StreamChunk>
 ```
 
-Source: [`packages/llm/llm/src/index.ts:64`](../../packages/llm/llm/src/index.ts)
+Source: [`packages/llm/llm/src/index.ts:67`](../../packages/llm/llm/src/index.ts)
 <!-- END GENERATED cordis-surface -->

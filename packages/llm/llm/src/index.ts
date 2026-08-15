@@ -227,22 +227,43 @@ export abstract class LlmAdapter {
     return Promise.resolve({ provider, id: model, name: model })
   }
 
-  /** Redacted authentication status for one owned provider route. */
+  /**
+   * Redacted authentication status for one owned provider route.
+   * @param provider - provider route owned by this adapter.
+   * @returns Redacted method status metadata for the route.
+   */
   providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
     return Promise.resolve({ provider, methods: [] })
   }
 
-  /** Start an interactive auth flow for one owned provider route. */
+  /**
+   * Start an interactive auth flow for one owned provider route.
+   * @param _provider - provider route owned by this adapter.
+   * @param _method - auth method to start.
+   * @returns Login snapshot for polling and prompt answer operations.
+   */
   startProviderAuthLogin(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot> {
     throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
 
-  /** Read a login flow snapshot. */
+  /**
+   * Read a login flow snapshot.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @returns Latest snapshot for the interactive login.
+   */
   providerAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
     throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
 
-  /** Answer a pending public login prompt. */
+  /**
+   * Answer a pending public login prompt.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @param _promptId - opaque prompt identifier from login events.
+   * @param _answer - public answer text for the prompt.
+   * @returns Updated login snapshot after the answer is applied.
+   */
   answerProviderAuthLogin(
     _provider: string,
     _loginId: string,
@@ -252,12 +273,22 @@ export abstract class LlmAdapter {
     throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
 
-  /** Cancel a login flow. */
+  /**
+   * Cancel a login flow.
+   * @param _provider - provider route owned by this adapter.
+   * @param _loginId - opaque login identifier.
+   * @returns Updated login snapshot after cancellation.
+   */
   cancelProviderAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
     throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
 
-  /** Remove stored credentials for one method. */
+  /**
+   * Remove stored credentials for one method.
+   * @param _provider - provider route owned by this adapter.
+   * @param _method - auth method whose stored credential should be removed.
+   * @returns Redacted status after logout.
+   */
   logoutProviderAuth(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus> {
     throw new LlmError('provider auth logout is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
@@ -872,22 +903,43 @@ export class LlmRuntime extends Service {
     return registration
   }
 
-  /** Redacted authentication status for one registered provider. */
+  /**
+   * Redacted authentication status for one registered provider.
+   * @param provider - provider route key owned by one registered adapter.
+   * @returns Redacted authentication status for every offered method.
+   */
   providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
     return this.registration(provider).adapter.providerAuthStatus(provider)
   }
 
-  /** Start an interactive provider-auth login. */
+  /**
+   * Start an interactive provider-auth login.
+   * @param provider - provider route key owned by one registered adapter.
+   * @param method - provider-auth method to start.
+   * @returns Initial login snapshot for polling and prompt answers.
+   */
   startProviderAuthLogin(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot> {
     return this.registration(provider).adapter.startProviderAuthLogin(provider, method)
   }
 
-  /** Read an interactive provider-auth login snapshot. */
+  /**
+   * Read an interactive provider-auth login snapshot.
+   * @param provider - provider route key owned by one registered adapter.
+   * @param loginId - opaque login id returned by startProviderAuthLogin.
+   * @returns Latest login snapshot.
+   */
   providerAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
     return this.registration(provider).adapter.providerAuthLogin(provider, loginId)
   }
 
-  /** Answer a pending interactive provider-auth prompt. */
+  /**
+   * Answer a pending interactive provider-auth prompt.
+   * @param provider - provider route key owned by one registered adapter.
+   * @param loginId - opaque login id returned by startProviderAuthLogin.
+   * @param promptId - opaque prompt id from a login event.
+   * @param answer - public answer text for the prompt.
+   * @returns Updated login snapshot after the answer is applied.
+   */
   answerProviderAuthLogin(
     provider: string,
     loginId: string,
@@ -897,12 +949,22 @@ export class LlmRuntime extends Service {
     return this.registration(provider).adapter.answerProviderAuthLogin(provider, loginId, promptId, answer)
   }
 
-  /** Cancel an interactive provider-auth login. */
+  /**
+   * Cancel an interactive provider-auth login.
+   * @param provider - provider route key owned by one registered adapter.
+   * @param loginId - opaque login id returned by startProviderAuthLogin.
+   * @returns Updated login snapshot after cancellation.
+   */
   cancelProviderAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
     return this.registration(provider).adapter.cancelProviderAuthLogin(provider, loginId)
   }
 
-  /** Remove a stored provider-auth credential. */
+  /**
+   * Remove a stored provider-auth credential.
+   * @param provider - provider route key owned by one registered adapter.
+   * @param method - provider-auth method whose credential should be removed.
+   * @returns Redacted authentication status after credential removal.
+   */
   logoutProviderAuth(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus> {
     return this.registration(provider).adapter.logoutProviderAuth(provider, method)
   }
