@@ -97,6 +97,14 @@ export const en = {
   onboardingSave: 'Save and continue',
   onboardingSaving: 'Saving…',
   keyRequired: 'Enter an API key to continue.',
+  oauthSignIn: 'Sign in with GitHub',
+  oauthSignOut: 'Sign out',
+  oauthSignedIn: 'Signed in with OAuth.',
+  oauthSignedOut: 'Not signed in with OAuth.',
+  oauthWorking: 'Working…',
+  oauthOpen: 'Open',
+  oauthEnterCode: 'and enter code',
+  oauthFailed: 'OAuth sign-in failed.',
 }
 
 /** The settings.models namespace key union. */
@@ -197,4 +205,12 @@ export const zh: { [Key in keyof typeof en]: string } = {
   onboardingSave: '保存并继续',
   onboardingSaving: '保存中…',
   keyRequired: '请输入 API 密钥后继续。',
+  oauthSignIn: '使用 GitHub 登录',
+  oauthSignOut: '退出登录',
+  oauthSignedIn: '已通过 OAuth 登录。',
+  oauthSignedOut: '尚未通过 OAuth 登录。',
+  oauthWorking: '处理中…',
+  oauthOpen: '打开',
+  oauthEnterCode: '并输入代码',
+  oauthFailed: 'OAuth 登录失败。',
 }

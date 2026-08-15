@@ -29,6 +29,47 @@ export interface ConfigurableProviderView {
    * surface must treat absence as "unknown", not as "shipped".
    */
   declared?: boolean
+  /** Authentication methods this runtime can offer for the route. */
+  authMethods?: ProviderAuthMethodView[]
+}
+
+/** Redacted authentication method metadata. */
+export interface ProviderAuthMethodView {
+  type: 'api_key' | 'oauth'
+  label: string
+  serviceable: boolean
+  configured?: boolean
+  source?: string
+}
+
+/** Redacted provider-auth status. */
+export interface ProviderAuthStatusView {
+  provider: string
+  methods: ProviderAuthMethodView[]
+}
+
+/** Public event emitted by an interactive provider-auth login. */
+export type ProviderAuthLoginEventView =
+  | { id: string; type: 'info'; message: string; links?: { url: string; label?: string }[] }
+  | { id: string; type: 'auth_url'; url: string; instructions?: string }
+  | { id: string; type: 'device_code'; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
+  | { id: string; type: 'progress'; message: string }
+  | {
+    id: string
+    type: 'prompt'
+    promptType: 'text' | 'select' | 'manual_code'
+    message: string
+    placeholder?: string
+    options?: { id: string; label: string; description?: string }[]
+  }
+
+/** Snapshot of an interactive provider-auth login. */
+export interface ProviderAuthLoginView {
+  loginId: string
+  state: 'pending' | 'completed' | 'failed' | 'cancelled'
+  events: ProviderAuthLoginEventView[]
+  status?: ProviderAuthStatusView
+  error?: string
 }
 
 /** Llm-domain unary methods (the map keys llm.* of RpcMethodMap). */
@@ -74,6 +115,36 @@ export interface LlmApi {
     }>,
     signal?: AbortSignal,
   ): Promise<RpcResponse<{ models: DiscoveredModelView[] }>>
+
+  /** Redacted provider-auth status for one provider route. */
+  providerAuthStatus(
+    request: RpcRequest<{ provider: string }>,
+  ): Promise<RpcResponse<{ status: ProviderAuthStatusView }>>
+
+  /** Start an interactive provider-auth login flow. */
+  providerAuthLoginStart(
+    request: RpcRequest<{ provider: string; method: 'oauth' }>,
+  ): Promise<RpcResponse<ProviderAuthLoginView>>
+
+  /** Poll an interactive provider-auth login flow. */
+  providerAuthLoginGet(
+    request: RpcRequest<{ provider: string; loginId: string }>,
+  ): Promise<RpcResponse<ProviderAuthLoginView>>
+
+  /** Answer a public prompt from an interactive provider-auth login flow. */
+  providerAuthLoginAnswer(
+    request: RpcRequest<{ provider: string; loginId: string; promptId: string; answer: string }>,
+  ): Promise<RpcResponse<ProviderAuthLoginView>>
+
+  /** Cancel an interactive provider-auth login flow. */
+  providerAuthLoginCancel(
+    request: RpcRequest<{ provider: string; loginId: string }>,
+  ): Promise<RpcResponse<ProviderAuthLoginView>>
+
+  /** Remove a stored provider-auth credential. */
+  providerAuthLogout(
+    request: RpcRequest<{ provider: string; method: 'oauth' }>,
+  ): Promise<RpcResponse<{ status: ProviderAuthStatusView }>>
 }
 
 /** Wire view of one model an interrogated endpoint advertises. */

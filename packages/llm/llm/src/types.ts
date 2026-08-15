@@ -184,6 +184,66 @@ export interface LlmConfigurableProvider {
    * from outside.
    */
   declared?: boolean
+  /** Authentication methods this runtime can offer for the route. */
+  authMethods?: readonly LlmProviderAuthMethodInfo[]
+}
+
+/** Provider authentication method offered by an adapter-owned route. */
+export type LlmProviderAuthMethod = 'api_key' | 'oauth'
+
+/** Redacted provider authentication capability metadata. */
+export interface LlmProviderAuthMethodInfo {
+  /** Method kind understood by provider-auth operations. */
+  type: LlmProviderAuthMethod
+  /** Human-readable method label. */
+  label: string
+  /** Whether this runtime can complete setup for this method. */
+  serviceable: boolean
+}
+
+/** Redacted provider authentication state for one method. */
+export interface LlmProviderAuthMethodStatus extends LlmProviderAuthMethodInfo {
+  /** Whether a credential for this method is currently stored or resolvable. */
+  configured: boolean
+  /** Non-secret source label when known. */
+  source?: string
+}
+
+/** Redacted provider authentication status. */
+export interface LlmProviderAuthStatus {
+  /** Provider route key. */
+  provider: string
+  /** Redacted method states. */
+  methods: readonly LlmProviderAuthMethodStatus[]
+}
+
+/** Public login event emitted by a provider-owned interactive auth flow. */
+export type LlmProviderAuthLoginEvent =
+  | { id: string; type: 'info'; message: string; links?: readonly { url: string; label?: string }[] }
+  | { id: string; type: 'auth_url'; url: string; instructions?: string }
+  | { id: string; type: 'device_code'; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
+  | { id: string; type: 'progress'; message: string }
+  | {
+    id: string
+    type: 'prompt'
+    promptType: 'text' | 'select' | 'manual_code'
+    message: string
+    placeholder?: string
+    options?: readonly { id: string; label: string; description?: string }[]
+  }
+
+/** Current snapshot of an interactive provider-auth login. */
+export interface LlmProviderAuthLoginSnapshot {
+  /** Opaque id for polling, answering prompts, or cancellation. */
+  loginId: string
+  /** Login lifecycle state. */
+  state: 'pending' | 'completed' | 'failed' | 'cancelled'
+  /** Public events produced so far. */
+  events: readonly LlmProviderAuthLoginEvent[]
+  /** Redacted status once a login completes. */
+  status?: LlmProviderAuthStatus
+  /** Failure message with no credential material. */
+  error?: string
 }
 
 /**

@@ -63,7 +63,12 @@ import {
 import {
   credentialsDescribeRequestSchema, credentialsSetRequestSchema, credentialsUnsetRequestSchema,
 } from '../api/credentials.schema.ts'
-import { llmDiscoverModelsRequestSchema, llmModelsRequestSchema, llmProvidersRequestSchema } from '../api/llm.schema.ts'
+import {
+  llmDiscoverModelsRequestSchema, llmModelsRequestSchema,
+  llmProviderAuthLoginAnswerRequestSchema, llmProviderAuthLoginCancelRequestSchema,
+  llmProviderAuthLoginGetRequestSchema, llmProviderAuthLoginStartRequestSchema,
+  llmProviderAuthLogoutRequestSchema, llmProviderAuthStatusRequestSchema, llmProvidersRequestSchema,
+} from '../api/llm.schema.ts'
 import {
   subagentHistoryRequestSchema,
   subagentInterruptRequestSchema,
@@ -140,6 +145,12 @@ const UNARY_ROUTES: UnaryRoutes = {
   'llm.providers': { schema: llmProvidersRequestSchema, invoke: (api, r) => api.llm.providers(r) },
   'llm.models': { schema: llmModelsRequestSchema, invoke: (api, r) => api.llm.models(r) },
   'llm.discoverModels': { schema: llmDiscoverModelsRequestSchema, invoke: (api, r, signal) => api.llm.discoverModels(r, signal) },
+  'llm.providerAuthStatus': { schema: llmProviderAuthStatusRequestSchema, invoke: (api, r) => api.llm.providerAuthStatus(r) },
+  'llm.providerAuthLoginStart': { schema: llmProviderAuthLoginStartRequestSchema, invoke: (api, r) => api.llm.providerAuthLoginStart(r) },
+  'llm.providerAuthLoginGet': { schema: llmProviderAuthLoginGetRequestSchema, invoke: (api, r) => api.llm.providerAuthLoginGet(r) },
+  'llm.providerAuthLoginAnswer': { schema: llmProviderAuthLoginAnswerRequestSchema, invoke: (api, r) => api.llm.providerAuthLoginAnswer(r) },
+  'llm.providerAuthLoginCancel': { schema: llmProviderAuthLoginCancelRequestSchema, invoke: (api, r) => api.llm.providerAuthLoginCancel(r) },
+  'llm.providerAuthLogout': { schema: llmProviderAuthLogoutRequestSchema, invoke: (api, r) => api.llm.providerAuthLogout(r) },
 }
 
 /** Route lookup that narrows an arbitrary path segment to a map key (single cast point for the string→key refinement). */

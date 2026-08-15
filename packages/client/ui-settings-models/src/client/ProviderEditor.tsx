@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { CredentialView, IApiClient, SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
+import type { CredentialView, IApiClient, ProviderAuthLoginEventView, ProviderAuthStatusView, SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   deletePath, getPath, hasPath, nodeAtPath, rehydrateSchema, setPath, validateDraft,
 } from '@deepseek-ai/dsh-client-schema-form'
@@ -81,6 +81,8 @@ export interface ProviderEditorProps {
   submitLabel?: keyof typeof en
   /** Override the in-flight commit action copy. */
   submitBusyLabel?: keyof typeof en
+  /** Redacted provider-auth status for non-key auth controls. */
+  authStatus?: ProviderAuthStatusView
   /** Close the editor; `changed` reports whether an Apply committed. */
   onClose: (changed: boolean) => void
 }
@@ -144,11 +146,18 @@ function refFor(namespace: SettingsNamespaceView, path: readonly string[], provi
  */
 export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const { namespace, settingsPath, api, t } = props
+  const provider = props.provider
+  const onClose = props.onClose
   const [draft, setDraft] = useState<Record<string, unknown>>(() => draftAt(namespace, settingsPath))
   const [keyDraft, setKeyDraft] = useState('')
   const [keyState, setKeyState] = useState<CredentialView | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | undefined>(undefined)
+  const [oauthStatus, setOauthStatus] = useState<ProviderAuthStatusView | undefined>(() => props.authStatus)
+  const [oauthBusy, setOauthBusy] = useState(false)
+  const [oauthLoginId, setOauthLoginId] = useState<string | undefined>(undefined)
+  const [oauthEvents, setOauthEvents] = useState<readonly ProviderAuthLoginEventView[]>([])
+  const [oauthFailure, setOauthFailure] = useState<string | undefined>(undefined)
   // A settings success advances both retry baselines immediately. Keeping the
   // derived fields in the draft prevents a pushed namespace refresh from
   // turning them into deletions when the following credential write is retried.
@@ -162,6 +171,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const disabled = props.readOnly || busy
   const layout = layoutOf(namespace.ns)
   const keyRef = refFor(namespace, settingsPath, props.provider)
+  const oauthMethod = oauthStatus?.methods.find(method => method.type === 'oauth' && method.serviceable)
   // The same schema read the create card makes, so the choices offered here
   // and there cannot drift apart: both come from the adapter's own `Config`.
   // Only the pi-ai layout has a per-route protocol for the read to find, and
@@ -187,6 +197,50 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
     )
     return () => { stale = true }
   }, [api.credentials, keyRef])
+
+  useEffect(() => {
+    setOauthStatus(props.authStatus)
+  }, [props.authStatus])
+
+  useEffect(() => {
+    if (oauthLoginId === undefined) return undefined
+    let stale = false
+    const poll = async (): Promise<void> => {
+      const response = await api.llm.providerAuthLoginGet({ provider, loginId: oauthLoginId })
+      if (stale) return
+      if (!response.result.ok) {
+        setOauthFailure(response.result.error.message)
+        setOauthBusy(false)
+        return
+      }
+      const snapshot = response.result.value
+      setOauthEvents(snapshot.events)
+      const prompt = snapshot.events.find(event => event.type === 'prompt')
+      if (prompt?.type === 'prompt') {
+        const answered = await api.llm.providerAuthLoginAnswer({
+          provider,
+          loginId: oauthLoginId,
+          promptId: prompt.id,
+          answer: '',
+        })
+        if (!answered.result.ok) setOauthFailure(answered.result.error.message)
+      }
+      if (snapshot.status !== undefined) setOauthStatus(snapshot.status)
+      if (snapshot.state !== 'pending') {
+        setOauthBusy(false)
+        if (snapshot.state === 'failed') setOauthFailure(snapshot.error ?? t('oauthFailed'))
+        else if (snapshot.state === 'completed') void onClose(true)
+        return
+      }
+      setTimeout(() => { void poll() }, 1000)
+    }
+    void poll().catch((error) => {
+      if (stale) return
+      setOauthFailure(messageOf(error))
+      setOauthBusy(false)
+    })
+    return () => { stale = true }
+  }, [api.llm, oauthLoginId, onClose, provider, t])
 
   const stringAt = (source: unknown, key: string): string | undefined => {
     const value = getPath(source, [key])
@@ -295,6 +349,42 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         setFailure(failure)
         return
       }
+
+      const signInOAuth = async (): Promise<void> => {
+        setOauthBusy(true)
+        setOauthFailure(undefined)
+        try {
+          const response = await api.llm.providerAuthLoginStart({ provider, method: 'oauth' })
+          if (!response.result.ok) {
+            setOauthFailure(response.result.error.message)
+            setOauthBusy(false)
+            return
+          }
+          setOauthLoginId(response.result.value.loginId)
+          setOauthEvents(response.result.value.events)
+        } catch (error) {
+          setOauthFailure(messageOf(error))
+          setOauthBusy(false)
+        }
+      }
+
+      const signOutOAuth = async (): Promise<void> => {
+        setOauthBusy(true)
+        setOauthFailure(undefined)
+        try {
+          const response = await api.llm.providerAuthLogout({ provider, method: 'oauth' })
+          if (!response.result.ok) {
+            setOauthFailure(response.result.error.message)
+            return
+          }
+          setOauthStatus(response.result.value.status)
+          onClose(true)
+        } catch (error) {
+          setOauthFailure(messageOf(error))
+        } finally {
+          setOauthBusy(false)
+        }
+      }
       props.onClose(true)
     } catch (error) {
       // A transport failure (disconnect, a request the host refuses) rejects
@@ -313,6 +403,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   }
 
   const keyLocked = keyState?.writable === false
+  const oauthConfigured = oauthMethod?.configured === true
 
   /**
    * The catalog beneath the user layer: what the composition entry pinned, or
@@ -376,6 +467,38 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
           />
           {shownKeyFailure === undefined ? null : <p className={styles['error']}>{t(shownKeyFailure)}</p>}
         </div>
+        {family === 'pi-ai' && oauthMethod !== undefined
+          ? (
+            <div className={styles['field']}>
+              <span className={styles['fieldLabel']}>{oauthMethod.label}</span>
+              <p className={styles['advancedHint']}>
+                {oauthConfigured ? t('oauthSignedIn') : t('oauthSignedOut')}
+              </p>
+              <button
+                type="button"
+                className={oauthConfigured ? styles['secondaryButton'] : styles['primaryButton']}
+                disabled={disabled || oauthBusy}
+                onClick={() => { void (oauthConfigured ? signOutOAuth() : signInOAuth()) }}
+              >
+                {oauthBusy
+                  ? t('oauthWorking')
+                  : oauthConfigured ? t('oauthSignOut') : t('oauthSignIn')}
+              </button>
+              {oauthEvents.map(event => event.type === 'device_code'
+                ? (
+                  <p key={event.id} className={styles['advancedHint']}>
+                    {`${t('oauthOpen')} ${event.verificationUri} ${t('oauthEnterCode')} ${event.userCode}`}
+                  </p>
+                )
+                : event.type === 'auth_url'
+                  ? <p key={event.id} className={styles['advancedHint']}>{`${t('oauthOpen')} ${event.url}`}</p>
+                  : event.type === 'progress'
+                    ? <p key={event.id} className={styles['advancedHint']}>{event.message}</p>
+                    : null)}
+              {oauthFailure === undefined ? null : <p className={styles['error']}>{oauthFailure}</p>}
+            </div>
+          )
+          : null}
         {props.credentialOnly === true ? null : <details className={styles['customized']}>
           <summary className={styles['customizedSummary']}>{t('customized')}</summary>
           <div className={styles['customizedBody']}>

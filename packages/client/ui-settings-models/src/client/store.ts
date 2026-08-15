@@ -7,7 +7,7 @@
  */
 
 import type {
-  ConfigurableProviderView, CredentialView, IApiClient, SettingsNamespaceView,
+  ConfigurableProviderView, CredentialView, IApiClient, ProviderAuthStatusView, SettingsNamespaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
@@ -31,6 +31,8 @@ export interface ProviderRow {
   apiKeyEnv: string | undefined
   /** Credential state for {@link apiKeyEnv}, once described. */
   credential: CredentialView | undefined
+  /** Redacted provider-auth state, when the adapter offers non-key auth. */
+  authStatus: ProviderAuthStatusView | undefined
 }
 
 /** Page snapshot. */
@@ -155,6 +157,7 @@ export class ModelsSettingsStore {
         removable,
         apiKeyEnv: apiKeyEnvOf(namespace, entry.settingsPath),
         credential: undefined,
+        authStatus: undefined,
       }
     })
     const refs = [...new Set(rows.flatMap(row => row.apiKeyEnv === undefined ? [] : [row.apiKeyEnv]))]
@@ -172,6 +175,17 @@ export class ModelsSettingsStore {
         credentialError = messageOf(error)
       }
     }
+    const authStatusEntries = await Promise.all(rows
+      .filter(row => row.entry.authMethods?.some(method => method.type === 'oauth' && method.serviceable) === true)
+      .map(async (row) => {
+        try {
+          const response = await this.api.llm.providerAuthStatus({ provider: row.entry.provider })
+          return response.result.ok ? [row.entry.provider, response.result.value.status] as const : undefined
+        } catch {
+          return undefined
+        }
+      }))
+    const authStatuses = new Map(authStatusEntries.filter((entry): entry is readonly [string, ProviderAuthStatusView] => entry !== undefined))
     if (generation !== this.generation) return
     this.store.update((s) => {
       s.status = 'ready'
@@ -183,6 +197,9 @@ export class ModelsSettingsStore {
         ...row.apiKeyEnv !== undefined && credentials[row.apiKeyEnv] !== undefined
           ? { credential: credentials[row.apiKeyEnv] }
           : {},
+        ...authStatuses.get(row.entry.provider) === undefined
+          ? {}
+          : { authStatus: authStatuses.get(row.entry.provider) },
       }))
       s.namespaces = namespaces
     })
@@ -201,6 +218,7 @@ export class ModelsSettingsStore {
  */
 export function providerUsable(row: ProviderRow): boolean {
   if (!row.entry.active) return false
+  if (row.authStatus?.methods.some(method => method.configured)) return true
   if (row.apiKeyEnv === undefined) return true
   return row.credential?.configured === true
 }
