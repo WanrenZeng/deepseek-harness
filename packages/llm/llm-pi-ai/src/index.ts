@@ -61,10 +61,11 @@ import { assertUsableApiKey, LlmError } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { PiAiAdapter } from './adapter.ts'
-import { catalogProviderIds, catalogProviderTakesApiKey } from './catalog.ts'
+import { catalogProviderAuthMethods, catalogProviderIds, catalogProviderTakesApiKey, catalogProviderTakesOAuth } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
+import { HarnessPiAiCredentialStore } from './oauth-store.ts'
 
 export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
@@ -119,6 +120,7 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedPiAiProviderPro
  */
 function directoryEntries(
   profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>,
+  oauthServiceable: (provider: string) => boolean,
 ): LlmConfigurableProvider[] {
   const catalog = new Set(catalogProviderIds())
   const entries = new Map<string, LlmConfigurableProvider>()
@@ -132,6 +134,7 @@ function directoryEntries(
       // narrowing a shipped provider's models stores a profile too, and that
       // route is still one pi-ai knows.
       declared: !catalog.has(provider),
+      authMethods: catalogProviderAuthMethods(provider, oauthServiceable(provider)),
     })
   }
   // A provider whose only native method is OAuth leaves this adapter nothing
@@ -140,7 +143,7 @@ function directoryEntries(
   // every request. Catalog *membership* is unaffected, so `declare` above still
   // answers what pi-ai ships.
   for (const provider of catalog) {
-    if (catalogProviderTakesApiKey(provider)) declare(provider, provider)
+    if (catalogProviderTakesApiKey(provider) || oauthServiceable(provider)) declare(provider, provider)
   }
   for (const [provider, profile] of profiles) declare(provider, profile.displayName)
   return [...entries.values()]
@@ -171,6 +174,12 @@ export function apply(ctx: Context, config: Config): void {
     return next
   }
   profiles()
+  const serviceableOAuthProviders = (): readonly string[] =>
+    catalogProviderIds().filter(provider => provider === 'github-copilot' && catalogProviderTakesOAuth(provider) && ctx.get('credentials') !== undefined)
+  const oauthServiceable = (provider: string): boolean => serviceableOAuthProviders().includes(provider)
+  const oauthCredentials = ctx.get('credentials') === undefined
+    ? undefined
+    : new HarnessPiAiCredentialStore(ctx.get('credentials'), serviceableOAuthProviders)
 
   const resolveApiKey = async (
     provider: string,
@@ -200,6 +209,7 @@ export function apply(ctx: Context, config: Config): void {
   const adapter = new PiAiAdapter({
     profiles,
     resolveApiKey,
+    ...oauthCredentials === undefined ? {} : { credentials: oauthCredentials },
     resolveAttachments: () => ctx.get('attachments'),
   })
   // The full installed catalog is configurable from the moment the plugin
@@ -209,7 +219,7 @@ export function apply(ctx: Context, config: Config): void {
   let directory: DirectoryRegistrationHandle | undefined
   let directoryFacts: unknown
   const ensureDirectory = (): void => {
-    const entries = directoryEntries(profiles())
+    const entries = directoryEntries(profiles(), oauthServiceable)
     if (deepEqualJson(entries, directoryFacts)) return
     // Atomic replace, never dispose-then-register: a route another adapter
     // family already declares (a profile keyed `deepseek-official`) would

@@ -23,6 +23,7 @@ import type {
   Provider,
   ThinkingLevelMap,
 } from '@earendil-works/pi-ai'
+import type { LlmProviderAuthMethodInfo } from '@deepseek-ai/dsh-llm'
 
 /**
  * Pricing for a model the installed catalog does not describe. The harness
@@ -159,6 +160,29 @@ export function catalogProviderIds(): readonly string[] {
  */
 export function catalogProviderTakesApiKey(provider: string): boolean {
   return catalogProvider(provider)?.auth.apiKey !== undefined
+}
+
+/** Whether this installed catalog provider declares OAuth support. */
+export function catalogProviderTakesOAuth(provider: string): boolean {
+  return catalogProvider(provider)?.auth.oauth !== undefined
+}
+
+/** Auth methods this pi-ai catalog provider declares and this runtime may service. */
+export function catalogProviderAuthMethods(provider: string, oauthServiceable: boolean): readonly LlmProviderAuthMethodInfo[] {
+  const auth = catalogProvider(provider)?.auth
+  if (auth === undefined) return []
+  return [
+    ...auth.apiKey === undefined ? [] : [{
+      type: 'api_key' as const,
+      label: auth.apiKey.name,
+      serviceable: true,
+    }],
+    ...auth.oauth === undefined ? [] : [{
+      type: 'oauth' as const,
+      label: auth.oauth.loginLabel ?? auth.oauth.name,
+      serviceable: oauthServiceable,
+    }],
+  ]
 }
 
 /**

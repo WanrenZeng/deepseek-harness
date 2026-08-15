@@ -24,6 +24,10 @@
 import { createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai'
 import type {
   Api,
+  AuthEvent,
+  AuthInteraction,
+  AuthPrompt,
+  CredentialStore,
   Model,
   Models,
   ModelThinkingLevel,
@@ -40,6 +44,10 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
+  LlmProviderAuthLoginEvent,
+  LlmProviderAuthLoginSnapshot,
+  LlmProviderAuthMethod,
+  LlmProviderAuthStatus,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -61,6 +69,21 @@ interface PiAiSnapshot {
   models: Models
 }
 
+interface PromptWaiter {
+  resolve(answer: string): void
+  reject(error: Error): void
+}
+
+interface LoginSession {
+  provider: string
+  controller: AbortController
+  state: LlmProviderAuthLoginSnapshot['state']
+  events: LlmProviderAuthLoginEvent[]
+  waiters: Map<string, PromptWaiter>
+  status?: LlmProviderAuthStatus
+  error?: string
+}
+
 /** Constructor options for {@link PiAiAdapter}: the two resolution hooks the plugin owns. */
 export interface PiAiAdapterOptions {
   /** Current validated profiles by provider route; called once per operation. */
@@ -74,6 +97,8 @@ export interface PiAiAdapterOptions {
    * `MISSING_CREDENTIAL` rather than falling back.
    */
   resolveApiKey: (provider: string, profile: ResolvedPiAiProviderProfile) => Promise<string | undefined>
+  /** Durable pi-ai credential store shared by every immutable Models snapshot. */
+  credentials?: CredentialStore
   /** Resolve the optional durable attachment service at request time. */
   resolveAttachments?: () => AttachmentStore | undefined
 }
@@ -185,6 +210,7 @@ function requestHeaders(headers: Readonly<Record<string, string>> | undefined): 
  */
 export class PiAiAdapter extends LlmAdapter {
   private snapshot: PiAiSnapshot | undefined
+  private readonly logins = new Map<string, LoginSession>()
 
   constructor(private readonly config: PiAiAdapterOptions) {
     super()
@@ -199,10 +225,172 @@ export class PiAiAdapter extends LlmAdapter {
   private current(): PiAiSnapshot {
     const profiles = this.config.profiles()
     if (this.snapshot?.profiles === profiles) return this.snapshot
-    const models: MutableModels = createModels()
+    const models: MutableModels = createModels(
+      this.config.credentials === undefined ? undefined : { credentials: this.config.credentials },
+    )
     for (const profile of profiles.values()) models.setProvider(profile.piProvider)
     this.snapshot = { profiles, models }
     return this.snapshot
+  }
+
+  private authStatusFromProvider(provider: string, piProvider = this.current().models.getProvider(provider)): Promise<LlmProviderAuthStatus> {
+    if (piProvider === undefined) return Promise.resolve({ provider, methods: [] })
+    return Promise.all([
+      ...(piProvider.auth.apiKey === undefined ? [] : [Promise.resolve({
+        type: 'api_key' as const,
+        label: piProvider.auth.apiKey.name,
+        serviceable: true,
+        configured: false,
+      })]),
+      ...(piProvider.auth.oauth === undefined ? [] : [(async () => {
+        const credential = await this.config.credentials?.read(provider)
+        return {
+          type: 'oauth' as const,
+          label: piProvider.auth.oauth?.loginLabel ?? piProvider.auth.oauth?.name ?? 'OAuth',
+          serviceable: this.config.credentials !== undefined,
+          configured: credential?.type === 'oauth',
+          ...credential?.type === 'oauth' ? { source: 'OAuth' } : {},
+        }
+      })()]),
+    ]).then(methods => ({ provider, methods }))
+  }
+
+  override providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
+    this.profileOf(this.current(), provider)
+    return this.authStatusFromProvider(provider)
+  }
+
+  private snapshotOf(session: LoginSession): LlmProviderAuthLoginSnapshot {
+    return {
+      loginId: [...this.logins.entries()].find(([, value]) => value === session)?.[0] ?? '',
+      state: session.state,
+      events: session.events.map(event => ({ ...event })),
+      ...session.status === undefined ? {} : { status: session.status },
+      ...session.error === undefined ? {} : { error: session.error },
+    }
+  }
+
+  private addEvent(session: LoginSession, event: Omit<LlmProviderAuthLoginEvent, 'id'>): void {
+    session.events.push({ ...event, id: crypto.randomUUID() } as LlmProviderAuthLoginEvent)
+  }
+
+  private prompt(session: LoginSession, prompt: AuthPrompt): Promise<string> {
+    if (prompt.type === 'secret') {
+      return Promise.reject(new Error('provider auth flow requested a secret prompt this UI does not expose'))
+    }
+    const id = crypto.randomUUID()
+    this.addEvent(session, {
+      type: 'prompt',
+      promptType: prompt.type,
+      message: prompt.message,
+      ...prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder },
+      ...prompt.type === 'select' ? { options: prompt.options.map(option => ({ ...option })) } : {},
+    })
+    const event = session.events.at(-1)
+    if (event?.type !== 'prompt') return Promise.reject(new Error('provider auth prompt could not be created'))
+    Object.assign(event, { id })
+    return new Promise((resolve, reject) => {
+      const abort = (): void => {
+        session.waiters.delete(id)
+        reject(new Error('provider auth login cancelled'))
+      }
+      if (session.controller.signal.aborted || prompt.signal?.aborted) {
+        abort()
+        return
+      }
+      const onAbort = (): void => { abort() }
+      session.controller.signal.addEventListener('abort', onAbort, { once: true })
+      prompt.signal?.addEventListener('abort', onAbort, { once: true })
+      session.waiters.set(id, {
+        resolve: (answer) => {
+          session.controller.signal.removeEventListener('abort', onAbort)
+          prompt.signal?.removeEventListener('abort', onAbort)
+          resolve(answer)
+        },
+        reject,
+      })
+    })
+  }
+
+  private notify(session: LoginSession, event: AuthEvent): void {
+    this.addEvent(session, event)
+  }
+
+  override startProviderAuthLogin(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot> {
+    if (method !== 'oauth') throw new LlmError('llm-pi-ai only supports OAuth provider-auth login', 'UNSUPPORTED_AUTH')
+    const snapshot = this.current()
+    this.profileOf(snapshot, provider)
+    const piProvider = snapshot.models.getProvider(provider)
+    if (piProvider?.auth.oauth === undefined || this.config.credentials === undefined) {
+      throw new LlmError(`pi-ai provider "${provider}" does not have serviceable OAuth login`, 'UNSUPPORTED_AUTH')
+    }
+    const loginId = crypto.randomUUID()
+    const session: LoginSession = {
+      provider,
+      controller: new AbortController(),
+      state: 'pending',
+      events: [],
+      waiters: new Map(),
+    }
+    this.logins.set(loginId, session)
+    const interaction: AuthInteraction = {
+      signal: session.controller.signal,
+      prompt: prompt => this.prompt(session, prompt),
+      notify: event => this.notify(session, event),
+    }
+    void snapshot.models.login(provider, 'oauth', interaction).then(
+      async () => {
+        session.state = 'completed'
+        session.status = await this.authStatusFromProvider(provider, piProvider)
+      },
+      (error: unknown) => {
+        session.state = session.controller.signal.aborted ? 'cancelled' : 'failed'
+        session.error = error instanceof Error ? error.message : String(error)
+      },
+    )
+    return Promise.resolve(this.snapshotOf(session))
+  }
+
+  override providerAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const session = this.logins.get(loginId)
+    if (session === undefined || session.provider !== provider) {
+      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    }
+    return Promise.resolve(this.snapshotOf(session))
+  }
+
+  override answerProviderAuthLogin(
+    provider: string,
+    loginId: string,
+    promptId: string,
+    answer: string,
+  ): Promise<LlmProviderAuthLoginSnapshot> {
+    const session = this.logins.get(loginId)
+    if (session === undefined || session.provider !== provider) {
+      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    }
+    const waiter = session.waiters.get(promptId)
+    if (waiter === undefined) throw new LlmError(`unknown provider auth prompt "${promptId}"`, 'UNKNOWN_AUTH_PROMPT')
+    session.waiters.delete(promptId)
+    waiter.resolve(answer)
+    return Promise.resolve(this.snapshotOf(session))
+  }
+
+  override cancelProviderAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    const session = this.logins.get(loginId)
+    if (session === undefined || session.provider !== provider) {
+      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    }
+    session.controller.abort('provider auth login cancelled')
+    session.state = 'cancelled'
+    return Promise.resolve(this.snapshotOf(session))
+  }
+
+  override async logoutProviderAuth(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus> {
+    if (method !== 'oauth') throw new LlmError('llm-pi-ai only supports OAuth provider-auth logout', 'UNSUPPORTED_AUTH')
+    this.profileOf(this.current(), provider)
+    await this.current().models.logout(provider)
+    return this.authStatusFromProvider(provider)
   }
 
   /** The profile for one route within one snapshot, or the not-owned failure. */

@@ -15,6 +15,9 @@ import type {
   LlmModelContext,
   LlmModelDiscoveryRequest,
   LlmModelInfo,
+  LlmProviderAuthLoginSnapshot,
+  LlmProviderAuthMethod,
+  LlmProviderAuthStatus,
   LlmResolvedModelInfo,
   LlmProviderInfo,
   ModelModality,
@@ -222,6 +225,41 @@ export abstract class LlmAdapter {
     _signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
     return Promise.resolve({ provider, id: model, name: model })
+  }
+
+  /** Redacted authentication status for one owned provider route. */
+  providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
+    return Promise.resolve({ provider, methods: [] })
+  }
+
+  /** Start an interactive auth flow for one owned provider route. */
+  startProviderAuthLogin(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot> {
+    throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
+  }
+
+  /** Read a login flow snapshot. */
+  providerAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
+  }
+
+  /** Answer a pending public login prompt. */
+  answerProviderAuthLogin(
+    _provider: string,
+    _loginId: string,
+    _promptId: string,
+    _answer: string,
+  ): Promise<LlmProviderAuthLoginSnapshot> {
+    throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
+  }
+
+  /** Cancel a login flow. */
+  cancelProviderAuthLogin(_provider: string, _loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    throw new LlmError('provider auth login is not supported by this adapter', 'UNSUPPORTED_AUTH')
+  }
+
+  /** Remove stored credentials for one method. */
+  logoutProviderAuth(_provider: string, _method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus> {
+    throw new LlmError('provider auth logout is not supported by this adapter', 'UNSUPPORTED_AUTH')
   }
 
   /**
@@ -452,7 +490,17 @@ export class LlmRuntime extends Service {
           || detached.some(seen => seen.provider === entry.provider)) {
           throw new LlmError(`configurable provider "${entry.provider}" is already declared`, 'DUPLICATE_DIRECTORY')
         }
-        detached.push({ ...entry, settingsPath: [...entry.settingsPath] })
+        if (entry.authMethods?.some(method =>
+          (method.type !== 'api_key' && method.type !== 'oauth') || method.label.length === 0) === true) {
+          throw new LlmError(`configurable provider "${entry.provider}" has invalid auth method metadata`, 'INVALID_DIRECTORY')
+        }
+        detached.push({
+          ...entry,
+          settingsPath: [...entry.settingsPath],
+          ...entry.authMethods === undefined
+            ? {}
+            : { authMethods: entry.authMethods.map(method => ({ ...method })) },
+        })
       }
       for (const entry of held) this.directory.delete(entry.provider)
       for (const entry of detached) this.directory.set(entry.provider, entry)
@@ -488,7 +536,13 @@ export class LlmRuntime extends Service {
    * @returns detached directory entries in declaration order.
    */
   listConfigurableProviders(): LlmConfigurableProvider[] {
-    return [...this.directory.values()].map(entry => ({ ...entry, settingsPath: [...entry.settingsPath] }))
+    return [...this.directory.values()].map(entry => ({
+      ...entry,
+      settingsPath: [...entry.settingsPath],
+      ...entry.authMethods === undefined
+        ? {}
+        : { authMethods: entry.authMethods.map(method => ({ ...method })) },
+    }))
   }
 
   /**
@@ -817,6 +871,41 @@ export class LlmRuntime extends Service {
     const registration = this.adapters.get(provider)
     if (!registration) throw new LlmError(`no adapter registered for provider "${provider}"`, 'NO_ADAPTER')
     return registration
+  }
+
+  /** Redacted authentication status for one registered provider. */
+  providerAuthStatus(provider: string): Promise<LlmProviderAuthStatus> {
+    return this.registration(provider).adapter.providerAuthStatus(provider)
+  }
+
+  /** Start an interactive provider-auth login. */
+  startProviderAuthLogin(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthLoginSnapshot> {
+    return this.registration(provider).adapter.startProviderAuthLogin(provider, method)
+  }
+
+  /** Read an interactive provider-auth login snapshot. */
+  providerAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    return this.registration(provider).adapter.providerAuthLogin(provider, loginId)
+  }
+
+  /** Answer a pending interactive provider-auth prompt. */
+  answerProviderAuthLogin(
+    provider: string,
+    loginId: string,
+    promptId: string,
+    answer: string,
+  ): Promise<LlmProviderAuthLoginSnapshot> {
+    return this.registration(provider).adapter.answerProviderAuthLogin(provider, loginId, promptId, answer)
+  }
+
+  /** Cancel an interactive provider-auth login. */
+  cancelProviderAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
+    return this.registration(provider).adapter.cancelProviderAuthLogin(provider, loginId)
+  }
+
+  /** Remove a stored provider-auth credential. */
+  logoutProviderAuth(provider: string, method: LlmProviderAuthMethod): Promise<LlmProviderAuthStatus> {
+    return this.registration(provider).adapter.logoutProviderAuth(provider, method)
   }
 
   /** Remove replay state whose historical route is owned by another adapter. */

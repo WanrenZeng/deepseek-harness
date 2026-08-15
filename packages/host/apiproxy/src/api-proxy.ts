@@ -3380,6 +3380,9 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           settingsPath: [...entry.settingsPath],
           active: active.has(entry.provider),
           ...entry.declared === undefined ? {} : { declared: entry.declared },
+          ...entry.authMethods === undefined
+            ? {}
+            : { authMethods: entry.authMethods.map(method => ({ ...method })) },
         }))
         // Routes registered without a directory declaration still appear —
         // they exist and serve models — just with no settings address. No
@@ -3421,6 +3424,84 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             code: 'model-discovery-failed',
             message: error instanceof Error ? error.message : String(error),
             details: { settingsNs, ...baseURL === undefined ? {} : { baseURL } },
+          })
+        }
+      },
+
+      async providerAuthStatus(request) {
+        const { provider } = request.payload
+        try {
+          return ok(request, { status: await ctx.llm.providerAuthStatus(provider) })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider },
+          })
+        }
+      },
+
+      async providerAuthLoginStart(request) {
+        const { provider, method } = request.payload
+        try {
+          return ok(request, await ctx.llm.startProviderAuthLogin(provider, method))
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider, method },
+          })
+        }
+      },
+
+      async providerAuthLoginGet(request) {
+        const { provider, loginId } = request.payload
+        try {
+          return ok(request, await ctx.llm.providerAuthLogin(provider, loginId))
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider, loginId },
+          })
+        }
+      },
+
+      async providerAuthLoginAnswer(request) {
+        const { provider, loginId, promptId, answer } = request.payload
+        try {
+          return ok(request, await ctx.llm.answerProviderAuthLogin(provider, loginId, promptId, answer))
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider, loginId, promptId },
+          })
+        }
+      },
+
+      async providerAuthLoginCancel(request) {
+        const { provider, loginId } = request.payload
+        try {
+          return ok(request, await ctx.llm.cancelProviderAuthLogin(provider, loginId))
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider, loginId },
+          })
+        }
+      },
+
+      async providerAuthLogout(request) {
+        const { provider, method } = request.payload
+        try {
+          return ok(request, { status: await ctx.llm.logoutProviderAuth(provider, method) })
+        } catch (error: unknown) {
+          return err(request, {
+            code: 'provider-auth-failed',
+            message: error instanceof Error ? error.message : String(error),
+            details: { provider, method },
           })
         }
       },

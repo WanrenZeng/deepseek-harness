@@ -60,7 +60,12 @@ import {
 import {
   credentialsDescribeValueSchema, credentialsSetValueSchema, credentialsUnsetValueSchema,
 } from '../api/credentials.schema.ts'
-import { llmDiscoverModelsValueSchema, llmModelsValueSchema, llmProvidersValueSchema } from '../api/llm.schema.ts'
+import {
+  llmDiscoverModelsValueSchema, llmModelsValueSchema,
+  llmProviderAuthLoginAnswerValueSchema, llmProviderAuthLoginCancelValueSchema,
+  llmProviderAuthLoginGetValueSchema, llmProviderAuthLoginStartValueSchema,
+  llmProviderAuthLogoutValueSchema, llmProviderAuthStatusValueSchema, llmProvidersValueSchema,
+} from '../api/llm.schema.ts'
 import {
   subagentHistoryValueSchema,
   subagentInterruptValueSchema,
@@ -160,6 +165,12 @@ export interface IApiClient {
     providers(payload: RequestPayload<'llm.providers'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providers'>>>
     models(payload: RequestPayload<'llm.models'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.models'>>>
     discoverModels(payload: RequestPayload<'llm.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.discoverModels'>>>
+    providerAuthStatus(payload: RequestPayload<'llm.providerAuthStatus'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthStatus'>>>
+    providerAuthLoginStart(payload: RequestPayload<'llm.providerAuthLoginStart'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthLoginStart'>>>
+    providerAuthLoginGet(payload: RequestPayload<'llm.providerAuthLoginGet'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthLoginGet'>>>
+    providerAuthLoginAnswer(payload: RequestPayload<'llm.providerAuthLoginAnswer'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthLoginAnswer'>>>
+    providerAuthLoginCancel(payload: RequestPayload<'llm.providerAuthLoginCancel'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthLoginCancel'>>>
+    providerAuthLogout(payload: RequestPayload<'llm.providerAuthLogout'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'llm.providerAuthLogout'>>>
   }
   /** client-response passthrough (rpcId is a backfill of the server-request's id — never minted here). */
   respond(message: ClientResponse, signal?: AbortSignal): Promise<RpcReceipt>
@@ -222,6 +233,12 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'llm.providers': llmProvidersValueSchema,
   'llm.models': llmModelsValueSchema,
   'llm.discoverModels': llmDiscoverModelsValueSchema,
+  'llm.providerAuthStatus': llmProviderAuthStatusValueSchema,
+  'llm.providerAuthLoginStart': llmProviderAuthLoginStartValueSchema,
+  'llm.providerAuthLoginGet': llmProviderAuthLoginGetValueSchema,
+  'llm.providerAuthLoginAnswer': llmProviderAuthLoginAnswerValueSchema,
+  'llm.providerAuthLoginCancel': llmProviderAuthLoginCancelValueSchema,
+  'llm.providerAuthLogout': llmProviderAuthLogoutValueSchema,
 }
 
 /** Default timeout for bounded unary calls (rpc-compare 2026-07-19: a hung host must not leave callers pending forever). */
@@ -498,6 +515,12 @@ export abstract class AbstractApiClient implements IApiClient {
     providers: (payload, signal) => this.callUnary('llm.providers', payload, signal),
     models: (payload, signal) => this.callUnary('llm.models', payload, signal),
     discoverModels: (payload, signal) => this.callUnary('llm.discoverModels', payload, signal),
+    providerAuthStatus: (payload, signal) => this.callUnary('llm.providerAuthStatus', payload, signal),
+    providerAuthLoginStart: (payload, signal) => this.callUnary('llm.providerAuthLoginStart', payload, signal),
+    providerAuthLoginGet: (payload, signal) => this.callUnary('llm.providerAuthLoginGet', payload, signal),
+    providerAuthLoginAnswer: (payload, signal) => this.callUnary('llm.providerAuthLoginAnswer', payload, signal),
+    providerAuthLoginCancel: (payload, signal) => this.callUnary('llm.providerAuthLoginCancel', payload, signal),
+    providerAuthLogout: (payload, signal) => this.callUnary('llm.providerAuthLogout', payload, signal),
   }
 
   readonly events: IApiClient['events'] = {

@@ -58,6 +58,8 @@ interface EditorTarget extends ProviderIdentity {
   credentialRef?: string
   /** The adapter reports this route as one it does not ship (see {@link ProviderEditorProps.declared}). */
   declared?: boolean
+  /** Redacted auth state for this provider. */
+  authStatus?: ProviderEditorProps['authStatus']
 }
 
 /** Values that vary around the shared provider-editor rendering. */
@@ -76,6 +78,7 @@ function renderProviderEditor({ target, ...props }: ProviderEditorRenderProps): 
       displayName={target.displayName}
       settingsPath={target.settingsPath}
       {...target.declared === true ? { declared: true } : {}}
+      {...target.authStatus === undefined ? {} : { authStatus: target.authStatus }}
       {...props}
     />
   )
@@ -148,6 +151,7 @@ function targetOf(row: ProviderRow): EditorTarget {
     // route-level fields only a declared route owns off the card, exactly as
     // it leaves the custom tag off the row.
     ...row.entry.declared === true ? { declared: true } : {},
+    ...row.authStatus === undefined ? {} : { authStatus: row.authStatus },
   }
 }
 
@@ -420,6 +424,7 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
                 hideTitle
                 namespace={addNamespace}
                 settingsPath={addTarget.settingsPath}
+                {...addTarget.authStatus === undefined ? {} : { authStatus: addTarget.authStatus }}
                 api={api}
                 t={t}
                 readOnly={!state.writable}
