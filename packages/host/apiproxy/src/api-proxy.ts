@@ -632,6 +632,27 @@ function directoryError(error: unknown): RpcError {
   return { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} }
 }
 
+/** Map provider-auth failures onto stable wire error codes. */
+function providerAuthError(error: unknown, details: Record<string, unknown>): RpcError {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'UNSUPPORTED_AUTH' || code === 'NO_ADAPTER') {
+    return { code: 'provider-auth-unsupported', message: error instanceof Error ? error.message : String(error), details }
+  }
+  if (code === 'UNKNOWN_AUTH_LOGIN') {
+    return { code: 'provider-auth-login-unknown', message: error instanceof Error ? error.message : String(error), details }
+  }
+  if (code === 'UNKNOWN_AUTH_PROMPT') {
+    return { code: 'provider-auth-prompt-unknown', message: error instanceof Error ? error.message : String(error), details }
+  }
+  if (code === 'ABORTED') {
+    return { code: 'provider-auth-cancelled', message: error instanceof Error ? error.message : String(error), details }
+  }
+  if (code === 'AUTH_EXPIRED') {
+    return { code: 'provider-auth-expired', message: error instanceof Error ? error.message : String(error), details }
+  }
+  return { code: 'provider-auth-provider-failed', message: error instanceof Error ? error.message : String(error), details }
+}
+
 /** Resolved Agent model and project-directory defaults consumed by the API implementation. */
 export interface ApiProxyDefaults {
   /**
@@ -3433,11 +3454,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, { status: await ctx.llm.providerAuthStatus(provider) })
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider },
-          })
+          return err(request, providerAuthError(error, { provider }))
         }
       },
 
@@ -3446,11 +3463,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, await ctx.llm.startProviderAuthLogin(provider, method))
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider, method },
-          })
+          return err(request, providerAuthError(error, { provider, method }))
         }
       },
 
@@ -3459,11 +3472,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, await ctx.llm.providerAuthLogin(provider, loginId))
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider, loginId },
-          })
+          return err(request, providerAuthError(error, { provider, loginId }))
         }
       },
 
@@ -3472,11 +3481,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, await ctx.llm.answerProviderAuthLogin(provider, loginId, promptId, answer))
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider, loginId, promptId },
-          })
+          return err(request, providerAuthError(error, { provider, loginId, promptId }))
         }
       },
 
@@ -3485,11 +3490,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, await ctx.llm.cancelProviderAuthLogin(provider, loginId))
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider, loginId },
-          })
+          return err(request, providerAuthError(error, { provider, loginId }))
         }
       },
 
@@ -3498,11 +3499,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         try {
           return ok(request, { status: await ctx.llm.logoutProviderAuth(provider, method) })
         } catch (error: unknown) {
-          return err(request, {
-            code: 'provider-auth-failed',
-            message: error instanceof Error ? error.message : String(error),
-            details: { provider, method },
-          })
+          return err(request, providerAuthError(error, { provider, method }))
         }
       },
     },

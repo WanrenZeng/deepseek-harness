@@ -240,6 +240,58 @@ describe('createFixtureApi', () => {
     expect(cleared.result.value.credentials.TEST_API_KEY).toEqual({ configured: false, writable: true })
   })
 
+  it('implements provider-auth status/login/get/answer/cancel/logout without exposing credential material', async () => {
+    const api = createFixtureApi()
+    const status = await api.llm.providerAuthStatus(req({ provider: 'github-copilot' }))
+    if (!status.result.ok) throw new Error('provider auth status failed')
+    expect(status.result.value.status).toEqual({
+      provider: 'github-copilot',
+      methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: false }],
+    })
+
+    const started = await api.llm.providerAuthLoginStart(req({ provider: 'github-copilot', method: 'oauth' }))
+    if (!started.result.ok) throw new Error('provider auth login start failed')
+    expect(started.result.value.events.some(event => event.type === 'device_code')).toBe(true)
+    const prompt = started.result.value.events.find(event => event.type === 'prompt')
+    if (prompt?.type !== 'prompt') throw new Error('prompt event missing')
+
+    const polled = await api.llm.providerAuthLoginGet(req({
+      provider: 'github-copilot',
+      loginId: started.result.value.loginId,
+    }))
+    if (!polled.result.ok) throw new Error('provider auth login get failed')
+    expect(polled.result.value.loginId).toBe(started.result.value.loginId)
+
+    const answered = await api.llm.providerAuthLoginAnswer(req({
+      provider: 'github-copilot',
+      loginId: started.result.value.loginId,
+      promptId: prompt.id,
+      answer: '',
+    }))
+    if (!answered.result.ok) throw new Error('provider auth login answer failed')
+    expect(answered.result.value.state).toBe('completed')
+    expect(JSON.stringify(answered.result.value)).not.toContain('access')
+    expect(JSON.stringify(answered.result.value)).not.toContain('refresh')
+
+    const cancelled = await api.llm.providerAuthLoginCancel(req({
+      provider: 'github-copilot',
+      loginId: started.result.value.loginId,
+    }))
+    if (!cancelled.result.ok) throw new Error('provider auth login cancel failed')
+    expect(cancelled.result.value.state).toBe('cancelled')
+
+    const loggedOut = await api.llm.providerAuthLogout(req({ provider: 'github-copilot', method: 'oauth' }))
+    if (!loggedOut.result.ok) throw new Error('provider auth logout failed')
+    expect(loggedOut.result.value.status.methods[0]).toMatchObject({
+      type: 'oauth',
+      configured: false,
+    })
+
+    const client = new FixtureApiClient()
+    const viaDispatch = await client.llm.providerAuthStatus({ provider: 'github-copilot' })
+    expect(viaDispatch.result.ok).toBe(true)
+  })
+
   it('emits the todo/write snapshot at the real tool boundary: between tool/call and tool/result, timestamps monotonic', async () => {
     const api = createFixtureApi()
     const tail = await api.sessions.history(req({ sessionId: sid('fx-alpha'), maxMessages: 10 }))

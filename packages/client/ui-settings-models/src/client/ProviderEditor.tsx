@@ -21,7 +21,7 @@
  * see instead of rebuilding the whole subtree from a partial descriptor.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { CredentialView, IApiClient, ProviderAuthLoginEventView, ProviderAuthStatusView, SettingsNamespaceView, SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
 import {
@@ -139,6 +139,21 @@ function refFor(namespace: SettingsNamespaceView, path: readonly string[], provi
   return typeof named === 'string' && named.length > 0 ? named : deriveKeyRef(provider)
 }
 
+function safeExternalUrl(raw: string): string | undefined {
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isOptionalGithubPrompt(event: Extract<ProviderAuthLoginEventView, { type: 'prompt' }>): boolean {
+  return event.promptType === 'text'
+    && /optional/i.test(event.message)
+    && /github(?:\.com)?/i.test(event.message)
+}
+
 /**
  * Render one provider's editing card.
  * @param props - the addressed profile plus wire faces and copy.
@@ -158,6 +173,8 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   const [oauthLoginId, setOauthLoginId] = useState<string | undefined>(undefined)
   const [oauthEvents, setOauthEvents] = useState<readonly ProviderAuthLoginEventView[]>([])
   const [oauthFailure, setOauthFailure] = useState<string | undefined>(undefined)
+  const [oauthPromptAnswer, setOauthPromptAnswer] = useState('')
+  const answeredPromptIds = useRef(new Set<string>())
   // A settings success advances both retry baselines immediately. Keeping the
   // derived fields in the draft prevents a pushed namespace refresh from
   // turning them into deletions when the following credential write is retried.
@@ -205,41 +222,63 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
   useEffect(() => {
     if (oauthLoginId === undefined) return undefined
     let stale = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settle = (snapshot: { state: 'pending' | 'completed' | 'failed' | 'cancelled'; status?: ProviderAuthStatusView; error?: string; events: readonly ProviderAuthLoginEventView[] }): void => {
+      setOauthEvents(snapshot.events)
+      if (snapshot.status !== undefined) setOauthStatus(snapshot.status)
+      if (snapshot.state === 'pending') {
+        setOauthBusy(false)
+        return
+      }
+      setOauthBusy(false)
+      setOauthLoginId(undefined)
+      if (snapshot.state === 'failed') setOauthFailure(snapshot.error ?? t('oauthFailed'))
+      if (snapshot.state === 'completed') onClose(true)
+    }
+    const answerPrompt = async (promptId: string, answer: string): Promise<void> => {
+      if (answeredPromptIds.current.has(promptId)) return
+      answeredPromptIds.current.add(promptId)
+      const answered = await api.llm.providerAuthLoginAnswer({
+        provider,
+        loginId: oauthLoginId,
+        promptId,
+        answer,
+      })
+      if (!answered.result.ok) {
+        setOauthFailure(answered.result.error.message)
+        return
+      }
+      settle(answered.result.value)
+    }
     const poll = async (): Promise<void> => {
       const response = await api.llm.providerAuthLoginGet({ provider, loginId: oauthLoginId })
       if (stale) return
       if (!response.result.ok) {
         setOauthFailure(response.result.error.message)
         setOauthBusy(false)
+        setOauthLoginId(undefined)
         return
       }
       const snapshot = response.result.value
-      setOauthEvents(snapshot.events)
-      const prompt = snapshot.events.find(event => event.type === 'prompt')
-      if (prompt?.type === 'prompt') {
-        const answered = await api.llm.providerAuthLoginAnswer({
-          provider,
-          loginId: oauthLoginId,
-          promptId: prompt.id,
-          answer: '',
-        })
-        if (!answered.result.ok) setOauthFailure(answered.result.error.message)
+      settle(snapshot)
+      if (snapshot.state !== 'pending') return
+      for (const event of snapshot.events) {
+        if (event.type !== 'prompt') continue
+        if (!isOptionalGithubPrompt(event) || answeredPromptIds.current.has(event.id)) continue
+        await answerPrompt(event.id, '')
       }
-      if (snapshot.status !== undefined) setOauthStatus(snapshot.status)
-      if (snapshot.state !== 'pending') {
-        setOauthBusy(false)
-        if (snapshot.state === 'failed') setOauthFailure(snapshot.error ?? t('oauthFailed'))
-        else if (snapshot.state === 'completed') void onClose(true)
-        return
-      }
-      setTimeout(() => { void poll() }, 1000)
+      timer = setTimeout(() => { void poll() }, 1000)
     }
-    void poll().catch((error) => {
+    void poll().catch((error: unknown) => {
       if (stale) return
       setOauthFailure(messageOf(error))
       setOauthBusy(false)
+      setOauthLoginId(undefined)
     })
-    return () => { stale = true }
+    return () => {
+      stale = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }, [api.llm, oauthLoginId, onClose, provider, t])
 
   const stringAt = (source: unknown, key: string): string | undefined => {
@@ -350,41 +389,6 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
         return
       }
 
-      const signInOAuth = async (): Promise<void> => {
-        setOauthBusy(true)
-        setOauthFailure(undefined)
-        try {
-          const response = await api.llm.providerAuthLoginStart({ provider, method: 'oauth' })
-          if (!response.result.ok) {
-            setOauthFailure(response.result.error.message)
-            setOauthBusy(false)
-            return
-          }
-          setOauthLoginId(response.result.value.loginId)
-          setOauthEvents(response.result.value.events)
-        } catch (error) {
-          setOauthFailure(messageOf(error))
-          setOauthBusy(false)
-        }
-      }
-
-      const signOutOAuth = async (): Promise<void> => {
-        setOauthBusy(true)
-        setOauthFailure(undefined)
-        try {
-          const response = await api.llm.providerAuthLogout({ provider, method: 'oauth' })
-          if (!response.result.ok) {
-            setOauthFailure(response.result.error.message)
-            return
-          }
-          setOauthStatus(response.result.value.status)
-          onClose(true)
-        } catch (error) {
-          setOauthFailure(messageOf(error))
-        } finally {
-          setOauthBusy(false)
-        }
-      }
       props.onClose(true)
     } catch (error) {
       // A transport failure (disconnect, a request the host refuses) rejects
@@ -393,6 +397,115 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
       setFailure(messageOf(error))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const signInOAuth = async (): Promise<void> => {
+    setOauthBusy(true)
+    setOauthFailure(undefined)
+    setOauthPromptAnswer('')
+    answeredPromptIds.current.clear()
+    try {
+      const response = await api.llm.providerAuthLoginStart({ provider, method: 'oauth' })
+      if (!response.result.ok) {
+        setOauthFailure(response.result.error.message)
+        setOauthBusy(false)
+        return
+      }
+      setOauthLoginId(response.result.value.loginId)
+      setOauthEvents(response.result.value.events)
+    } catch (error) {
+      setOauthFailure(messageOf(error))
+      setOauthBusy(false)
+    }
+  }
+
+  const signOutOAuth = async (): Promise<void> => {
+    setOauthBusy(true)
+    setOauthFailure(undefined)
+    try {
+      const response = await api.llm.providerAuthLogout({ provider, method: 'oauth' })
+      if (!response.result.ok) {
+        setOauthFailure(response.result.error.message)
+        return
+      }
+      setOauthStatus(response.result.value.status)
+      setOauthEvents([])
+      setOauthLoginId(undefined)
+      answeredPromptIds.current.clear()
+      onClose(true)
+    } catch (error) {
+      setOauthFailure(messageOf(error))
+    } finally {
+      setOauthBusy(false)
+    }
+  }
+
+  const cancelOAuth = async (): Promise<void> => {
+    if (oauthLoginId === undefined) return
+    setOauthBusy(true)
+    try {
+      const response = await api.llm.providerAuthLoginCancel({ provider, loginId: oauthLoginId })
+      if (!response.result.ok) {
+        setOauthFailure(response.result.error.message)
+        return
+      }
+      setOauthEvents(response.result.value.events)
+      if (response.result.value.status !== undefined) setOauthStatus(response.result.value.status)
+      setOauthLoginId(undefined)
+    } catch (error) {
+      setOauthFailure(messageOf(error))
+    } finally {
+      setOauthBusy(false)
+    }
+  }
+
+  const pendingPrompt = oauthEvents.find((event): event is Extract<ProviderAuthLoginEventView, { type: 'prompt' }> =>
+    event.type === 'prompt'
+    && !isOptionalGithubPrompt(event)
+    && !answeredPromptIds.current.has(event.id))
+  useEffect(() => {
+    if (pendingPrompt === undefined) {
+      setOauthPromptAnswer('')
+      return
+    }
+    if (pendingPrompt.promptType !== 'select') return
+    const firstOption = pendingPrompt.options?.[0]?.id
+    if (firstOption === undefined) return
+    setOauthPromptAnswer(current => current.length > 0 ? current : firstOption)
+  }, [pendingPrompt])
+
+  const submitPrompt = async (): Promise<void> => {
+    if (pendingPrompt === undefined || oauthLoginId === undefined) return
+    setOauthBusy(true)
+    setOauthFailure(undefined)
+    answeredPromptIds.current.add(pendingPrompt.id)
+    try {
+      const response = await api.llm.providerAuthLoginAnswer({
+        provider,
+        loginId: oauthLoginId,
+        promptId: pendingPrompt.id,
+        answer: pendingPrompt.promptType === 'select'
+          ? (pendingPrompt.options?.find(option => option.id === oauthPromptAnswer)?.id ?? pendingPrompt.options?.[0]?.id ?? '')
+          : oauthPromptAnswer,
+      })
+      if (!response.result.ok) {
+        setOauthFailure(response.result.error.message)
+        answeredPromptIds.current.delete(pendingPrompt.id)
+        return
+      }
+      setOauthEvents(response.result.value.events)
+      if (response.result.value.status !== undefined) setOauthStatus(response.result.value.status)
+      setOauthPromptAnswer('')
+      if (response.result.value.state !== 'pending') {
+        setOauthLoginId(undefined)
+        if (response.result.value.state === 'completed') onClose(true)
+      }
+    } catch (error) {
+      answeredPromptIds.current.delete(pendingPrompt.id)
+      setOauthFailure(messageOf(error))
+    } finally {
+      setOauthBusy(false)
     }
   }
 
@@ -484,17 +597,93 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
                   ? t('oauthWorking')
                   : oauthConfigured ? t('oauthSignOut') : t('oauthSignIn')}
               </button>
+              {oauthLoginId === undefined ? null : (
+                <button
+                  type="button"
+                  className={styles['secondaryButton']}
+                  disabled={disabled}
+                  onClick={() => { void cancelOAuth() }}
+                >
+                  {t('oauthCancel')}
+                </button>
+              )}
               {oauthEvents.map(event => event.type === 'device_code'
                 ? (
                   <p key={event.id} className={styles['advancedHint']}>
-                    {`${t('oauthOpen')} ${event.verificationUri} ${t('oauthEnterCode')} ${event.userCode}`}
+                    {t('oauthOpen')}
+                    {' '}
+                    {safeExternalUrl(event.verificationUri) === undefined
+                      ? event.verificationUri
+                      : (
+                        <a href={safeExternalUrl(event.verificationUri)} target="_blank" rel="noreferrer noopener">
+                          {event.verificationUri}
+                        </a>
+                      )}
+                    {' '}
+                    {t('oauthEnterCode')}
+                    {' '}
+                    <code>{event.userCode}</code>
                   </p>
                 )
                 : event.type === 'auth_url'
-                  ? <p key={event.id} className={styles['advancedHint']}>{`${t('oauthOpen')} ${event.url}`}</p>
+                  ? (
+                    <p key={event.id} className={styles['advancedHint']}>
+                      {t('oauthOpen')}
+                      {' '}
+                      {safeExternalUrl(event.url) === undefined
+                        ? event.url
+                        : (
+                          <a href={safeExternalUrl(event.url)} target="_blank" rel="noreferrer noopener">
+                            {event.url}
+                          </a>
+                        )}
+                    </p>
+                  )
                   : event.type === 'progress'
                     ? <p key={event.id} className={styles['advancedHint']}>{event.message}</p>
                     : null)}
+              {pendingPrompt === undefined
+                ? null
+                : (
+                  <div className={styles['field']}>
+                    <span className={styles['fieldLabel']}>{pendingPrompt.message}</span>
+                    {pendingPrompt.promptType === 'select'
+                      ? (
+                        <select
+                          className={styles['input']}
+                          aria-label={t('oauthPromptInput')}
+                          value={oauthPromptAnswer}
+                          disabled={disabled || oauthBusy}
+                          onChange={(event) => { setOauthPromptAnswer(event.target.value) }}
+                        >
+                          {(pendingPrompt.options ?? []).map(option => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                      : (
+                        <input
+                          className={styles['input']}
+                          type="text"
+                          aria-label={t('oauthPromptInput')}
+                          placeholder={pendingPrompt.placeholder}
+                          value={oauthPromptAnswer}
+                          disabled={disabled || oauthBusy}
+                          onChange={(event) => { setOauthPromptAnswer(event.target.value) }}
+                        />
+                      )}
+                    <button
+                      type="button"
+                      className={styles['primaryButton']}
+                      disabled={disabled || oauthBusy}
+                      onClick={() => { void submitPrompt() }}
+                    >
+                      {t('oauthPromptSubmit')}
+                    </button>
+                  </div>
+                )}
               {oauthFailure === undefined ? null : <p className={styles['error']}>{oauthFailure}</p>}
             </div>
           )

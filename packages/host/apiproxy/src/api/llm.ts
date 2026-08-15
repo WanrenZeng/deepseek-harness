@@ -30,7 +30,7 @@ export interface ConfigurableProviderView {
    */
   declared?: boolean
   /** Authentication methods this runtime can offer for the route. */
-  authMethods?: ProviderAuthMethodView[]
+  authMethods?: readonly ProviderAuthMethodView[]
 }
 
 /** Redacted authentication method metadata. */
@@ -45,12 +45,12 @@ export interface ProviderAuthMethodView {
 /** Redacted provider-auth status. */
 export interface ProviderAuthStatusView {
   provider: string
-  methods: ProviderAuthMethodView[]
+  methods: readonly ProviderAuthMethodView[]
 }
 
 /** Public event emitted by an interactive provider-auth login. */
 export type ProviderAuthLoginEventView =
-  | { id: string; type: 'info'; message: string; links?: { url: string; label?: string }[] }
+  | { id: string; type: 'info'; message: string; links?: readonly { url: string; label?: string }[] }
   | { id: string; type: 'auth_url'; url: string; instructions?: string }
   | { id: string; type: 'device_code'; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
   | { id: string; type: 'progress'; message: string }
@@ -60,14 +60,14 @@ export type ProviderAuthLoginEventView =
     promptType: 'text' | 'select' | 'manual_code'
     message: string
     placeholder?: string
-    options?: { id: string; label: string; description?: string }[]
+    options?: readonly { id: string; label: string; description?: string }[]
   }
 
 /** Snapshot of an interactive provider-auth login. */
 export interface ProviderAuthLoginView {
   loginId: string
   state: 'pending' | 'completed' | 'failed' | 'cancelled'
-  events: ProviderAuthLoginEventView[]
+  events: readonly ProviderAuthLoginEventView[]
   status?: ProviderAuthStatusView
   error?: string
 }

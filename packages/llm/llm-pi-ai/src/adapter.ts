@@ -74,6 +74,10 @@ interface PromptWaiter {
   reject(error: Error): void
 }
 
+type LoginEventWithoutId = LlmProviderAuthLoginEvent extends infer Event
+  ? Event extends { id: string } ? Omit<Event, 'id'> : never
+  : never
+
 interface LoginSession {
   provider: string
   controller: AbortController
@@ -82,6 +86,16 @@ interface LoginSession {
   waiters: Map<string, PromptWaiter>
   status?: LlmProviderAuthStatus
   error?: string
+  settledAt?: number
+}
+
+const LOGIN_RETENTION_MS = 5 * 60_000
+
+function providerAuthFailureMessage(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  if (code === 'ABORTED') return 'provider auth login cancelled'
+  if (code === 'AUTH_EXPIRED') return 'provider auth credential expired'
+  return 'provider auth login failed'
 }
 
 /** Constructor options for {@link PiAiAdapter}: the two resolution hooks the plugin owns. */
@@ -233,7 +247,10 @@ export class PiAiAdapter extends LlmAdapter {
     return this.snapshot
   }
 
-  private authStatusFromProvider(provider: string, piProvider = this.current().models.getProvider(provider)): Promise<LlmProviderAuthStatus> {
+  private authStatusFromProvider(
+    provider: string,
+    piProvider = this.current().models.getProvider(provider),
+  ): Promise<LlmProviderAuthStatus> {
     if (piProvider === undefined) return Promise.resolve({ provider, methods: [] })
     return Promise.all([
       ...(piProvider.auth.apiKey === undefined ? [] : [Promise.resolve({
@@ -270,8 +287,36 @@ export class PiAiAdapter extends LlmAdapter {
     }
   }
 
-  private addEvent(session: LoginSession, event: Omit<LlmProviderAuthLoginEvent, 'id'>): void {
-    session.events.push({ ...event, id: crypto.randomUUID() } as LlmProviderAuthLoginEvent)
+  private addEvent(session: LoginSession, event: LoginEventWithoutId): void {
+    session.events.push({ ...event, id: crypto.randomUUID() })
+  }
+
+  private pruneLogins(now = Date.now()): void {
+    for (const [loginId, session] of this.logins.entries()) {
+      if (session.settledAt === undefined) continue
+      if (now - session.settledAt < LOGIN_RETENTION_MS) continue
+      this.logins.delete(loginId)
+    }
+  }
+
+  private sessionOf(provider: string, loginId: string): LoginSession {
+    this.pruneLogins()
+    const session = this.logins.get(loginId)
+    if (session === undefined || session.provider !== provider) {
+      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
+    }
+    return session
+  }
+
+  private settleLogin(loginId: string, session: LoginSession, state: LlmProviderAuthLoginSnapshot['state']): void {
+    session.state = state
+    session.settledAt = Date.now()
+    for (const [promptId, waiter] of session.waiters.entries()) {
+      waiter.reject(new Error(`provider auth prompt "${promptId}" was settled by ${state}`))
+      session.waiters.delete(promptId)
+    }
+    this.logins.set(loginId, session)
+    this.pruneLogins()
   }
 
   private prompt(session: LoginSession, prompt: AuthPrompt): Promise<string> {
@@ -279,13 +324,27 @@ export class PiAiAdapter extends LlmAdapter {
       return Promise.reject(new Error('provider auth flow requested a secret prompt this UI does not expose'))
     }
     const id = crypto.randomUUID()
-    this.addEvent(session, {
-      type: 'prompt',
-      promptType: prompt.type,
-      message: prompt.message,
-      ...prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder },
-      ...prompt.type === 'select' ? { options: prompt.options.map(option => ({ ...option })) } : {},
-    })
+    if (prompt.type === 'text') {
+      this.addEvent(session, {
+        type: 'prompt',
+        promptType: prompt.type,
+        message: prompt.message,
+        ...prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder },
+      })
+    } else if (prompt.type === 'select') {
+      this.addEvent(session, {
+        type: 'prompt',
+        promptType: prompt.type,
+        message: prompt.message,
+        options: prompt.options.map(option => ({ ...option })),
+      })
+    } else {
+      this.addEvent(session, {
+        type: 'prompt',
+        promptType: 'manual_code',
+        message: prompt.message,
+      })
+    }
     const event = session.events.at(-1)
     if (event?.type !== 'prompt') return Promise.reject(new Error('provider auth prompt could not be created'))
     Object.assign(event, { id })
@@ -307,7 +366,11 @@ export class PiAiAdapter extends LlmAdapter {
           prompt.signal?.removeEventListener('abort', onAbort)
           resolve(answer)
         },
-        reject,
+        reject: (error) => {
+          session.controller.signal.removeEventListener('abort', onAbort)
+          prompt.signal?.removeEventListener('abort', onAbort)
+          reject(error)
+        },
       })
     })
   }
@@ -336,27 +399,23 @@ export class PiAiAdapter extends LlmAdapter {
     const interaction: AuthInteraction = {
       signal: session.controller.signal,
       prompt: prompt => this.prompt(session, prompt),
-      notify: event => this.notify(session, event),
+      notify: (event) => { this.notify(session, event) },
     }
     void snapshot.models.login(provider, 'oauth', interaction).then(
       async () => {
-        session.state = 'completed'
+        this.settleLogin(loginId, session, 'completed')
         session.status = await this.authStatusFromProvider(provider, piProvider)
       },
       (error: unknown) => {
-        session.state = session.controller.signal.aborted ? 'cancelled' : 'failed'
-        session.error = error instanceof Error ? error.message : String(error)
+        this.settleLogin(loginId, session, session.controller.signal.aborted ? 'cancelled' : 'failed')
+        if (!session.controller.signal.aborted) session.error = providerAuthFailureMessage(error)
       },
     )
     return Promise.resolve(this.snapshotOf(session))
   }
 
   override providerAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
-    const session = this.logins.get(loginId)
-    if (session === undefined || session.provider !== provider) {
-      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
-    }
-    return Promise.resolve(this.snapshotOf(session))
+    return Promise.resolve(this.snapshotOf(this.sessionOf(provider, loginId)))
   }
 
   override answerProviderAuthLogin(
@@ -365,10 +424,8 @@ export class PiAiAdapter extends LlmAdapter {
     promptId: string,
     answer: string,
   ): Promise<LlmProviderAuthLoginSnapshot> {
-    const session = this.logins.get(loginId)
-    if (session === undefined || session.provider !== provider) {
-      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
-    }
+    const session = this.sessionOf(provider, loginId)
+    if (session.state !== 'pending') throw new LlmError(`provider auth login "${loginId}" is not pending`, 'UNSUPPORTED_AUTH')
     const waiter = session.waiters.get(promptId)
     if (waiter === undefined) throw new LlmError(`unknown provider auth prompt "${promptId}"`, 'UNKNOWN_AUTH_PROMPT')
     session.waiters.delete(promptId)
@@ -377,12 +434,9 @@ export class PiAiAdapter extends LlmAdapter {
   }
 
   override cancelProviderAuthLogin(provider: string, loginId: string): Promise<LlmProviderAuthLoginSnapshot> {
-    const session = this.logins.get(loginId)
-    if (session === undefined || session.provider !== provider) {
-      throw new LlmError(`unknown provider auth login "${loginId}"`, 'UNKNOWN_AUTH_LOGIN')
-    }
+    const session = this.sessionOf(provider, loginId)
     session.controller.abort('provider auth login cancelled')
-    session.state = 'cancelled'
+    this.settleLogin(loginId, session, 'cancelled')
     return Promise.resolve(this.snapshotOf(session))
   }
 

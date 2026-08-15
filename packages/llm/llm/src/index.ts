@@ -490,8 +490,7 @@ export class LlmRuntime extends Service {
           || detached.some(seen => seen.provider === entry.provider)) {
           throw new LlmError(`configurable provider "${entry.provider}" is already declared`, 'DUPLICATE_DIRECTORY')
         }
-        if (entry.authMethods?.some(method =>
-          (method.type !== 'api_key' && method.type !== 'oauth') || method.label.length === 0) === true) {
+        if (entry.authMethods?.some(method => method.label.length === 0) === true) {
           throw new LlmError(`configurable provider "${entry.provider}" has invalid auth method metadata`, 'INVALID_DIRECTORY')
         }
         detached.push({

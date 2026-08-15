@@ -185,7 +185,10 @@ export class ModelsSettingsStore {
           return undefined
         }
       }))
-    const authStatuses = new Map(authStatusEntries.filter((entry): entry is readonly [string, ProviderAuthStatusView] => entry !== undefined))
+    const authStatusPairs = authStatusEntries.filter(
+      (entry): entry is readonly [string, ProviderAuthStatusView] => entry !== undefined,
+    )
+    const authStatuses = new Map(authStatusPairs)
     if (generation !== this.generation) return
     this.store.update((s) => {
       s.status = 'ready'

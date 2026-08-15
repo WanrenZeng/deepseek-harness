@@ -36,6 +36,33 @@ function parseCredential(provider: string, value: string): Credential | undefine
   if (type !== 'oauth' && type !== 'api_key') {
     throw new Error(`llm-pi-ai: stored OAuth credential for "${provider}" has an unsupported type`)
   }
+  if (type === 'oauth') {
+    const oauth = parsed as { access?: unknown; refresh?: unknown; expires?: unknown }
+    if (typeof oauth.access !== 'string' || oauth.access.length === 0) {
+      throw new Error(`llm-pi-ai: stored OAuth credential for "${provider}" is missing a non-empty access token`)
+    }
+    if (typeof oauth.refresh !== 'string' || oauth.refresh.length === 0) {
+      throw new Error(`llm-pi-ai: stored OAuth credential for "${provider}" is missing a non-empty refresh token`)
+    }
+    if (!Number.isFinite(oauth.expires)) {
+      throw new Error(`llm-pi-ai: stored OAuth credential for "${provider}" has an invalid expiry`)
+    }
+    return parsed as Credential
+  }
+  const apiKey = parsed as { key?: unknown; env?: unknown }
+  if (apiKey.key !== undefined && typeof apiKey.key !== 'string') {
+    throw new Error(`llm-pi-ai: stored API-key credential for "${provider}" has a non-string key`)
+  }
+  if (apiKey.env !== undefined) {
+    if (typeof apiKey.env !== 'object' || apiKey.env === null || Array.isArray(apiKey.env)) {
+      throw new Error(`llm-pi-ai: stored API-key credential for "${provider}" has an invalid env map`)
+    }
+    for (const value of Object.values(apiKey.env as Record<string, unknown>)) {
+      if (typeof value !== 'string') {
+        throw new Error(`llm-pi-ai: stored API-key credential for "${provider}" has a non-string env value`)
+      }
+    }
+  }
   return parsed as Credential
 }
 

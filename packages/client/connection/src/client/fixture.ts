@@ -32,8 +32,23 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { CommandDescriptor, CommandExecution, CommandResult } from '@deepseek-ai/dsh-commands/types'
 import { deriveEventMessage, foldSurface } from '@deepseek-ai/dsh-session/surface'
 import type {
-  ApiProxy, ClientRequest, ClientResponse, HistoryEntry, HostFrame, MuxFrame, RpcReceipt,
-  ModelProviderGroup, ModelSelection, RpcRequest, RpcResponse, RpcResult, ServerRequest, ServerResponse, SessionSummary,
+  ApiProxy,
+  ClientRequest,
+  ClientResponse,
+  HistoryEntry,
+  HostFrame,
+  ModelProviderGroup,
+  ModelSelection,
+  MuxFrame,
+  ProviderAuthLoginView,
+  ProviderAuthStatusView,
+  RpcReceipt,
+  RpcRequest,
+  RpcResponse,
+  RpcResult,
+  ServerRequest,
+  ServerResponse,
+  SessionSummary,
   ToolCallView, ToolEventView, ToolResultView, WorkspaceId, WorkspaceView,
 } from './api.ts'
 import type { RequestPayload, ResponseValue, RpcMethodMap } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -1532,6 +1547,19 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     // DeepSeek route so unrelated GUI journeys do not enter first-run setup.
     ['DEEPSEEK_API_KEY', true],
   ])
+  const fixtureOauthCredentialRef = 'DSH_PI_AI_OAUTH_GITHUB_COPILOT'
+  let fixtureOauthConfigured = fixtureCredentials.has(fixtureOauthCredentialRef)
+  const fixtureOauthLogins = new Map<string, ProviderAuthLoginView>()
+  const fixtureOauthStatus = (): ProviderAuthStatusView => ({
+    provider: 'github-copilot',
+    methods: [{
+      type: 'oauth',
+      label: 'Sign in with GitHub',
+      serviceable: true,
+      configured: fixtureOauthConfigured,
+      ...fixtureOauthConfigured ? { source: 'OAuth' } : {},
+    }],
+  })
   /**
    * Preset compositions the fixture serves. Held as state rather than
    * constants so the settings editor's save and delete are exercisable: the
@@ -2936,10 +2964,12 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       }),
       set: (request) => {
         fixtureCredentials.set(request.payload.ref, true)
+        if (request.payload.ref === fixtureOauthCredentialRef) fixtureOauthConfigured = true
         return ok(request, {})
       },
       unset: (request) => {
         fixtureCredentials.delete(request.payload.ref)
+        if (request.payload.ref === fixtureOauthCredentialRef) fixtureOauthConfigured = false
         return ok(request, {})
       },
     },
@@ -2949,6 +2979,15 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
           { provider: 'deepseek-official', displayName: 'DeepSeek', settingsNs: 'llm-deepseek', settingsPath: [], active: true },
           { provider: 'openai', displayName: 'openai', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'openai'], active: true, declared: false },
           { provider: 'anthropic', displayName: 'anthropic', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'anthropic'], active: false, declared: false },
+          {
+            provider: 'github-copilot',
+            displayName: 'github-copilot',
+            settingsNs: 'llm-pi-ai',
+            settingsPath: ['providers', 'github-copilot'],
+            active: true,
+            declared: false,
+            authMethods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true }],
+          },
           // One hand-declared route, so a surface reading this fixture meets
           // the tagged shape rather than only the shipped one.
           { provider: 'acme-gateway', displayName: 'Acme Gateway', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'acme-gateway'], active: true, declared: true },
@@ -2961,6 +3000,79 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
       discoverModels: request => ok(request, {
         models: fixtureModelGroups().flatMap(group => group.models.map(model => ({ id: model.id, name: model.name }))),
       }),
+      providerAuthStatus: request => ok(request, { status: fixtureOauthStatus() }),
+      providerAuthLoginStart: (request) => {
+        const loginId = randomUuid()
+        const promptId = randomUuid()
+        const snapshot: ProviderAuthLoginView = {
+          loginId,
+          state: 'pending',
+          events: [
+            {
+              id: randomUuid(),
+              type: 'device_code',
+              userCode: 'ABCD-EFGH',
+              verificationUri: 'https://github.com/login/device',
+              intervalSeconds: 5,
+              expiresInSeconds: 900,
+            },
+            {
+              id: randomUuid(),
+              type: 'auth_url',
+              url: 'https://github.com/login/device',
+              instructions: 'Open the URL and enter the code.',
+            },
+            {
+              id: promptId,
+              type: 'prompt',
+              promptType: 'text',
+              message: 'Optional: press Enter to continue with github.com default account.',
+              placeholder: 'Leave blank to use default',
+            },
+          ],
+        }
+        fixtureOauthLogins.set(loginId, snapshot)
+        return ok(request, snapshot)
+      },
+      providerAuthLoginGet: (request) => {
+        const snapshot = fixtureOauthLogins.get(request.payload.loginId)
+        return snapshot === undefined
+          ? err(request, { code: 'provider-auth-login-unknown', message: 'unknown fixture oauth login id', details: { loginId: request.payload.loginId } })
+          : ok(request, snapshot)
+      },
+      providerAuthLoginAnswer: (request) => {
+        const current = fixtureOauthLogins.get(request.payload.loginId)
+        if (current === undefined) {
+          return err(request, { code: 'provider-auth-login-unknown', message: 'unknown fixture oauth login id', details: { loginId: request.payload.loginId } })
+        }
+        if (!current.events.some(event => event.type === 'prompt' && event.id === request.payload.promptId)) {
+          return err(request, { code: 'provider-auth-prompt-unknown', message: 'unknown fixture oauth prompt id', details: { promptId: request.payload.promptId } })
+        }
+        const next: ProviderAuthLoginView = {
+          ...current,
+          state: 'completed',
+          status: {
+            provider: 'github-copilot',
+            methods: [{ type: 'oauth', label: 'Sign in with GitHub', serviceable: true, configured: true, source: 'OAuth' }],
+          },
+        }
+        fixtureOauthConfigured = true
+        fixtureOauthLogins.set(request.payload.loginId, next)
+        return ok(request, next)
+      },
+      providerAuthLoginCancel: (request) => {
+        const current = fixtureOauthLogins.get(request.payload.loginId)
+        if (current === undefined) {
+          return err(request, { code: 'provider-auth-login-unknown', message: 'unknown fixture oauth login id', details: { loginId: request.payload.loginId } })
+        }
+        const next: ProviderAuthLoginView = { ...current, state: 'cancelled' }
+        fixtureOauthLogins.set(request.payload.loginId, next)
+        return ok(request, next)
+      },
+      providerAuthLogout: (request) => {
+        fixtureOauthConfigured = false
+        return ok(request, { status: fixtureOauthStatus() })
+      },
     },
     respond(message: ClientResponse): Promise<RpcReceipt> {
       // Same routing discipline as the host: rpcId first, then the payload's
@@ -3129,6 +3241,12 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'llm.providers': return this.api.llm.providers(request)
       case 'llm.models': return this.api.llm.models(request)
       case 'llm.discoverModels': return this.api.llm.discoverModels(request, signal)
+      case 'llm.providerAuthStatus': return this.api.llm.providerAuthStatus(request)
+      case 'llm.providerAuthLoginStart': return this.api.llm.providerAuthLoginStart(request)
+      case 'llm.providerAuthLoginGet': return this.api.llm.providerAuthLoginGet(request)
+      case 'llm.providerAuthLoginAnswer': return this.api.llm.providerAuthLoginAnswer(request)
+      case 'llm.providerAuthLoginCancel': return this.api.llm.providerAuthLoginCancel(request)
+      case 'llm.providerAuthLogout': return this.api.llm.providerAuthLogout(request)
     }
   }
 

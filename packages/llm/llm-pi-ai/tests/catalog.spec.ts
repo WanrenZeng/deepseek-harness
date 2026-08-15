@@ -74,6 +74,19 @@ async function harness(config: LlmPiAi.Config): Promise<Context> {
   return ctx
 }
 
+async function harnessWithCredentials(config: LlmPiAi.Config): Promise<Context> {
+  const ctx = new Context()
+  await ctx.plugin(LlmRuntime)
+  ctx.provide('credentials', {
+    resolve: () => Promise.resolve(undefined),
+    describe: () => Promise.resolve({ configured: false, writable: true }),
+    set: () => Promise.resolve(),
+    unset: () => Promise.resolve(),
+  } as never)
+  await ctx.plugin(LlmPiAi, config)
+  return ctx
+}
+
 describe('hand-declared providers', () => {
   it('serves a route pi-ai has never heard of from its own declaration', async () => {
     const server = await mockServer([{ events: textEvents }])
@@ -137,7 +150,7 @@ describe('hand-declared providers', () => {
     const ctx = await harness(gateway(`${server.url}/v1`))
     const directory = ctx.llm.listConfigurableProviders()
 
-    expect(directory).toContainEqual({
+    expect(directory.find(entry => entry.provider === 'acme-gateway')).toMatchObject({
       provider: 'acme-gateway',
       displayName: 'Acme Gateway',
       settingsNs: 'llm-pi-ai',
@@ -960,12 +973,25 @@ describe('configurable-provider directory', () => {
     // invented.
     const ctx = await harness({ providers: { 'openai-codex': { apiKeyEnv: KEY_ENV } } })
 
-    expect(ctx.llm.listConfigurableProviders()).toContainEqual({
+    expect(ctx.llm.listConfigurableProviders().find(entry => entry.provider === 'openai-codex')).toMatchObject({
       provider: 'openai-codex',
       displayName: 'openai-codex',
       settingsNs: 'llm-pi-ai',
       settingsPath: ['providers', 'openai-codex'],
       declared: false,
     })
+  })
+
+  it('marks github-copilot OAuth serviceable only when the credentials seam is mounted', async () => {
+    const withoutCredentials = await harness({})
+    const withoutEntry = withoutCredentials.llm.listConfigurableProviders()
+      .find(entry => entry.provider === 'github-copilot')
+    expect(withoutEntry?.authMethods?.find(method => method.type === 'oauth')?.serviceable).toBe(false)
+
+    const withCredentials = await harnessWithCredentials({})
+    const withEntry = withCredentials.llm.listConfigurableProviders()
+      .find(entry => entry.provider === 'github-copilot')
+    expect(withEntry?.authMethods?.find(method => method.type === 'oauth')?.serviceable).toBe(true)
+    expect(withCredentials.llm.listConfigurableProviders().map(entry => entry.provider)).not.toContain('openai-codex')
   })
 })
